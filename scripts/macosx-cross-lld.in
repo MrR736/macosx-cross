@@ -1,0 +1,522 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+MACOSX_ROOT="@MACOSX_CROSS_LIBDIR@"
+OSX_SDK="${MACOSX_ROOT}/MacOSX.sdk"
+
+MACOSX_SDK_VERSION="${MACOSX_SDK_VERSION:-}"
+MACOSX_TARGET="${MACOSX_TARGET:-}"
+MACOSX_ARCH=""
+MACOSX_LLD=""
+
+declare -a LLD_ARGS=()
+declare -a SEARCH_PATHS=()
+
+IF_ARRAY_ITEM() {
+	local ITEM="$1"
+	shift
+	local ARRAY_ITEM
+	for ARRAY_ITEM in "$@"; do
+		[[ "$ARRAY_ITEM" == "$ITEM" ]] && return 0
+	done
+	return 1
+}
+
+
+ADD_UNIQUE() {
+	local ITEM="$1"
+	local ARRAY_NAME="$2"
+	local -n ARRAY_REF="$ARRAY_NAME"
+	if ! IF_ARRAY_ITEM "$ITEM" "${ARRAY_REF[@]}" && [ -d "$ITEM" ]; then
+		ARRAY_REF+=("$ITEM")
+	fi
+}
+
+
+DIE() {
+	echo "macosx-cross-lld: error: $*" >&2
+	exit 1
+}
+
+
+WARN() {
+	echo "macosx-cross-lld: warning: $*" >&2
+}
+
+
+USAGE()
+{
+	cat <<EOF
+Usage:
+  macosx-cross-lld [options] <ld64.lld arguments>
+
+Options:
+  --macosx-sdk=VERSION
+      Select the macOS/iOS SDK version.
+
+  --target=TARGET
+      Select the Apple target triple.
+
+      Examples:
+        x86_64-apple-darwin
+        arm64-apple-darwin
+        arm64-apple-ios
+        x86_64-apple-ios
+        arm64-apple-ios-macabi
+        x86_64-apple-ios-macabi
+
+  --arch=ARCH
+      Explicitly select Mach-O architecture.
+
+  --lld=PATH
+      Explicitly select ld64.lld.
+
+  --help
+      Show this help.
+
+Everything after the wrapper options is passed to ld64.lld.
+
+Examples:
+
+  macosx-cross-lld \\
+      --macosx-sdk=10.9 \\
+      --target=x86_64-apple-darwin \\
+      main.o -o test
+
+  macosx-cross-lld \\
+      --macosx-sdk=14.5 \\
+      --target=arm64-apple-darwin \\
+      main.o -lSystem -o test
+
+  macosx-cross-lld \\
+      --macosx-sdk=14.5 \\
+      --target=arm64-apple-ios \\
+      main.o -o test
+
+  macosx-cross-lld \\
+      --macosx-sdk=14.5 \\
+      --target=arm64-apple-ios-macabi \\
+      main.o -o test
+EOF
+}
+
+
+
+FIND_LLD()
+{
+	local CANDIDATE
+
+	if [[ -n "$MACOSX_LLD" ]]; then
+		[[ -x "$MACOSX_LLD" ]] ||
+			DIE "ld64.lld not executable: $MACOSX_LLD"
+
+		return
+	fi
+
+	#
+	# Prefer versioned LLVM binaries because your host has LLVM 19.
+	#
+	for CANDIDATE in \
+		ld64.lld-19 \
+		ld64.lld \
+		/usr/bin/ld64.lld-19 \
+		/usr/bin/ld64.lld \
+		/bin/ld64.lld-19 \
+		/bin/ld64.lld
+	do
+		if [[ "$CANDIDATE" == */* ]]; then
+			if [[ -x "$CANDIDATE" ]]; then
+				MACOSX_LLD="$CANDIDATE"
+				return
+			fi
+		else
+			if command -v "$CANDIDATE" >/dev/null 2>&1; then
+				MACOSX_LLD="$(command -v "$CANDIDATE")"
+				return
+			fi
+		fi
+	done
+
+	DIE "ld64.lld not found"
+}
+
+
+
+LOAD_METADATA()
+{
+	local METADATA="${OSX_SDK}/.metadata"
+
+	if [[ ! -f "$METADATA" ]]; then
+		WARN "SDK metadata not found: $METADATA"
+		return
+	fi
+
+	# shellcheck disable=SC1090
+	source "$METADATA"
+}
+
+
+
+GET_SDK_VERSION()
+{
+	local VERSION
+
+	#
+	# Explicit SDK version always wins.
+	#
+	if [[ -n "$MACOSX_SDK_VERSION" ]]; then
+		printf '%s\n' "$MACOSX_SDK_VERSION"
+		return
+	fi
+
+	#
+	# SDK_VERSION from metadata if available.
+	#
+	if [[ -n "${SDK_VERSION:-}" ]]; then
+		printf '%s\n' "$SDK_VERSION"
+		return
+	fi
+
+	#
+	# SDK path:
+	#
+	#   .../MacOSX.sdk/10.9
+	#
+	VERSION="${OSX_SDK##*/}"
+
+	printf '%s\n' "$VERSION"
+}
+
+
+
+GET_ARCH_FROM_TARGET()
+{
+	case "$MACOSX_TARGET" in
+		x86_64-*)
+			printf '%s\n' "x86_64"
+			;;
+
+		arm64-*)
+			printf '%s\n' "arm64"
+			;;
+
+		arm64e-*)
+			printf '%s\n' "arm64e"
+			;;
+
+		arm-*)
+			printf '%s\n' "arm"
+			;;
+
+		i386-*)
+			printf '%s\n' "i386"
+			;;
+
+		*)
+			return 1
+			;;
+	esac
+}
+
+
+
+GET_PLATFORM()
+{
+	case "$MACOSX_TARGET" in
+		*-apple-darwin*)
+			printf '%s\n' "macos"
+			;;
+
+		*-apple-ios-macabi*)
+			printf '%s\n' "mac-catalyst"
+			;;
+
+		*-apple-ios*)
+			printf '%s\n' "ios"
+			;;
+
+		*)
+			DIE "unsupported Apple target: $MACOSX_TARGET"
+			;;
+	esac
+}
+
+
+
+GET_DEPLOYMENT_TARGET()
+{
+	local PLATFORM="$1"
+
+	case "$PLATFORM" in
+		macos)
+			printf '%s\n' \
+				"${MACOSX_DEPLOYMENT_TARGET:-$MACOSX_SDK_VERSION}"
+			;;
+
+		ios|mac-catalyst)
+			printf '%s\n' \
+				"${IPHONEOS_DEPLOYMENT_TARGET:-$MACOSX_SDK_VERSION}"
+			;;
+
+		*)
+			DIE "unknown platform: $PLATFORM"
+			;;
+	esac
+}
+
+
+
+BUILD_SEARCH_PATHS()
+{
+	local PATH_NAME
+	local -a PATHS=()
+
+	SEARCH_PATHS=()
+
+	#
+	# Standard SDK locations.
+	#
+	ADD_UNIQUE "${OSX_SDK}/usr/lib" SEARCH_PATHS
+	ADD_UNIQUE "${OSX_SDK}/usr/lib/system" SEARCH_PATHS
+
+	ADD_UNIQUE \
+		"${OSX_SDK}/System/Library/Frameworks" \
+		SEARCH_PATHS
+
+	ADD_UNIQUE \
+		"${OSX_SDK}/System/Library/PrivateFrameworks" \
+		SEARCH_PATHS
+
+	ADD_UNIQUE \
+		"${OSX_SDK}/Library/Frameworks" \
+		SEARCH_PATHS
+
+	ADD_UNIQUE \
+		"${OSX_SDK}/Library/PrivateFrameworks" \
+		SEARCH_PATHS
+
+	#
+	# macOS library search paths.
+	#
+	if [[ "$MACOSX_TARGET" == *-apple-darwin* ]]; then
+
+		if [[ -n "${LIBRARY_SEARCH_PATHS:-}" ]]; then
+			read -r -a PATHS <<< "$LIBRARY_SEARCH_PATHS"
+
+			for PATH_NAME in "${PATHS[@]}"; do
+				[[ -n "$PATH_NAME" ]] || continue
+				ADD_UNIQUE "$PATH_NAME" SEARCH_PATHS
+			done
+		fi
+
+	#
+	# iOS / Catalyst library search paths.
+	#
+	else
+
+		if [[ -n "${LIBRARY_IOS_SEARCH_PATHS:-}" ]]; then
+			read -r -a PATHS <<< "$LIBRARY_IOS_SEARCH_PATHS"
+
+			for PATH_NAME in "${PATHS[@]}"; do
+				[[ -n "$PATH_NAME" ]] || continue
+				ADD_UNIQUE "$PATH_NAME" SEARCH_PATHS
+			done
+		fi
+	fi
+
+	#
+	# iOS unzipped twin prefix.
+	#
+	if [[ -n "${IOS_UNZIPPERED_TWIN_PREFIX_PATH:-}" ]]; then
+
+		ADD_UNIQUE \
+			"${IOS_UNZIPPERED_TWIN_PREFIX_PATH}/usr/lib" \
+			SEARCH_PATHS
+
+		ADD_UNIQUE \
+			"${IOS_UNZIPPERED_TWIN_PREFIX_PATH}/System/Library/Frameworks" \
+			SEARCH_PATHS
+	fi
+}
+
+APPEND_SEARCH_PATHS() {
+	local SEARCH_PATH
+
+	for SEARCH_PATH in "${SEARCH_PATHS[@]}"; do
+
+		[[ -n "$SEARCH_PATH" ]] || continue
+
+		#
+		# Do not pass unresolved Xcode variables to ld64.lld.
+		#
+		if [[ "$SEARCH_PATH" == *'$('* ]] ||
+		   [[ "$SEARCH_PATH" == *'${'* ]]; then
+			continue
+		fi
+
+		#
+		# Already inside the selected SDK.
+		#
+		if [[ "$SEARCH_PATH" == "$OSX_SDK"/* ]]; then
+			LLD_ARGS+=("-L${SEARCH_PATH}")
+			continue
+		fi
+
+		#
+		# SDK-relative Unix paths.
+		#
+		case "$SEARCH_PATH" in
+			/usr/*)
+				LLD_ARGS+=("-L${OSX_SDK}${SEARCH_PATH}")
+				;;
+
+			/System/*)
+				LLD_ARGS+=("-F${OSX_SDK}${SEARCH_PATH}")
+				;;
+
+			/Library/*)
+				LLD_ARGS+=("-F${OSX_SDK}${SEARCH_PATH}")
+				;;
+
+			/*)
+				#
+				# Other absolute paths are already complete.
+				#
+				LLD_ARGS+=("-L${SEARCH_PATH}")
+				;;
+
+			*)
+				#
+				# Relative search path.
+				#
+				LLD_ARGS+=("-L${SEARCH_PATH}")
+				;;
+		esac
+	done
+}
+
+HAS_ARG() {
+	local ARG="$1"
+	local ITEM
+	for ITEM in "${LLD_ARGS[@]}"; do
+		[[ "$ITEM" == "$ARG" ]] && return 0
+	done
+	return 1
+}
+
+HAS_ARG_PREFIX() {
+	local PREFIX="$1"
+	local ITEM
+	for ITEM in "${LLD_ARGS[@]}"; do
+		[[ "$ITEM" == "$PREFIX"* ]] && return 0
+	done
+	return 1
+}
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		--macosx-sdk=*)
+			MACOSX_SDK_VERSION="${1#*=}"
+			shift
+			;;
+		--target=*)
+			MACOSX_TARGET="${1#*=}"
+			shift
+			;;
+		--arch=*)
+			MACOSX_ARCH="${1#*=}"
+			shift
+			;;
+		--lld=*)
+			MACOSX_LLD="${1#*=}"
+			shift
+			;;
+		--help|-h)
+			USAGE
+			exit 0
+			;;
+		--)
+			shift
+			while [[ $# -gt 0 ]]; do
+				LLD_ARGS+=("$1")
+				shift
+			done
+			break
+			;;
+		*)
+			LLD_ARGS+=("$1")
+			shift
+			;;
+	esac
+done
+
+if [[ -z "$MACOSX_TARGET" ]]; then
+	DIE "--target is required"
+fi
+
+if [[ -n "$MACOSX_SDK_VERSION" ]]; then
+	OSX_SDK="${MACOSX_ROOT}/MacOSX.sdk/${MACOSX_SDK_VERSION}"
+else
+	if [[ ! -d "$OSX_SDK" ]]; then
+		DIE "MacOSX SDK root not found: $OSX_SDK"
+	fi
+fi
+
+if [[ ! -d "$OSX_SDK" ]]; then
+	DIE "SDK not found: $OSX_SDK"
+fi
+
+LOAD_METADATA
+
+if [[ -z "$MACOSX_ARCH" ]]; then
+	if ! MACOSX_ARCH="$(GET_ARCH_FROM_TARGET)"; then
+		DIE "cannot determine architecture from target: $MACOSX_TARGET"
+	fi
+fi
+
+MACOSX_PLATFORM="$(GET_PLATFORM)"
+
+if [[ -z "$MACOSX_SDK_VERSION" ]]; then
+	MACOSX_SDK_VERSION="$(GET_SDK_VERSION)"
+fi
+
+MACOSX_DEPLOYMENT="$(GET_DEPLOYMENT_TARGET "$MACOSX_PLATFORM")"
+
+case "$MACOSX_PLATFORM" in
+	macos)
+		export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-$MACOSX_DEPLOYMENT}"
+		;;
+	ios|mac-catalyst)
+		export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-$MACOSX_DEPLOYMENT}"
+		;;
+esac
+
+FIND_LLD
+
+BUILD_SEARCH_PATHS
+
+if ! HAS_ARG "-syslibroot" && ! HAS_ARG_PREFIX "-syslibroot="; then
+	LLD_ARGS+=("-syslibroot" "$OSX_SDK")
+fi
+
+if ! HAS_ARG "-arch"; then
+	LLD_ARGS+=("-arch" "$MACOSX_ARCH")
+fi
+
+if ! HAS_ARG "-platform_version"; then
+	LLD_ARGS+=("-platform_version" "$MACOSX_PLATFORM" "$MACOSX_DEPLOYMENT" "$MACOSX_SDK_VERSION")
+fi
+
+APPEND_SEARCH_PATHS
+
+if ! HAS_ARG_PREFIX "-F"; then
+	LLD_ARGS+=("-F${OSX_SDK}/System/Library/Frameworks")
+	LLD_ARGS+=("-F${OSX_SDK}/System/Library/PrivateFrameworks")
+fi
+
+if [ -n "$SYSTEM_FRAMEWORK_SEARCH_PATHS" ]; then
+	LLD_ARGS+=("-F$SYSTEM_FRAMEWORK_SEARCH_PATHS")
+fi
+
+exec "$MACOSX_LLD" "${LLD_ARGS[@]}"

@@ -1,0 +1,252 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+. @MACOSX_CROSS_LIBDIR@/scripts/macosx_tools.sh
+
+case "${1:-}" in
+	-s|--silent)
+		SET_MACOSX_LOG
+		shift
+		;;
+esac
+
+case "${1:-}" in
+	install)
+		shift
+		if [[ $# -eq 0 ]]; then
+			echo "Usage: $0 install <SDK_VERSION> [...]" >&2
+			exit 1
+		fi
+		for VERSION in "$@"; do
+			MACOSX_LOG "Install SDK $VERSION"
+			"${MACOSX_ROOT}/scripts/install_macosx.sh" "$VERSION"
+		done
+		;;
+
+	refresh)
+		shift
+		if [[ $# -eq 0 ]]; then
+			echo "Usage: $0 refresh <SDK_VERSION> [...]" >&2
+			exit 1
+		fi
+		for VERSION in "$@"; do
+			MACOSX_LOG "Refreshing SDK $VERSION"
+			"${MACOSX_ROOT}/scripts/refresh_macosx.sh" "$VERSION"
+		done
+		;;
+
+	allrefresh)
+		shift
+		MACOSX_SDK_DIR_VERSIONS=("${OSX_SDK}"/*)
+		for VERSION in "${MACOSX_SDK_DIR_VERSIONS[@]}"; do
+			[[ -d "$VERSION" ]] || continue
+			VERSION="$(basename "$VERSION")"
+			MACOSX_LOG "Refreshing SDK $VERSION"
+			"${MACOSX_ROOT}/scripts/refresh_macosx.sh" "$VERSION"
+		done
+		;;
+
+
+	--tool=*)
+		COPY_TOOL "$0" "${1#--tool=}"
+		exit 0
+		;;
+
+	--tool)
+		shift
+		if [[ $# -eq 0 ]]; then
+			echo "Usage: $0 --tool <TOOL>" >&2
+			exit 1
+		fi
+		for tool in "$@"; do
+			MACOSX_LOG "Install Tool $tool"
+			COPY_TOOL "$0" "$tool"
+		done
+
+		exit 0
+		;;
+
+	--list-tool)
+		if [[ ! -d "${MACOSX_ROOT}/tools" ]]; then
+			echo "Tools directory not found: ${MACOSX_ROOT}/tools" >&2
+			exit 1
+		fi
+		find "${MACOSX_ROOT}/tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort
+		exit 0
+		;;
+
+	reinstall)
+		shift
+
+		YES=0
+		if [[ "${1:-}" == "-y" ]]; then
+			YES=1
+			shift
+		fi
+
+		if [[ $# -eq 0 ]]; then
+			if (( YES == 0 )); then
+				echo "Usage: $0 reinstall <SDK_VERSION> [...]" >&2
+			else
+				echo "Usage: $0 reinstall -y <SDK_VERSION> [...]" >&2
+			fi
+			exit 1
+		fi
+
+		if (( YES == 0 )); then
+			read -r -p "ReInstall $* installed macOS SDKs? [y/N] " ANSWER
+			case "$ANSWER" in
+				y|Y)
+					;;
+				*)
+					echo "Cancelled."
+					exit 0
+					;;
+			esac
+		fi
+
+		for VERSION in "$@"; do
+			MACOSX_LOG "ReInstall SDK $VERSION"
+			"${MACOSX_ROOT}/scripts/remove_macosx.sh" "$VERSION"
+			"${MACOSX_ROOT}/scripts/install_macosx.sh" "$VERSION"
+		done
+		;;
+
+	remove|uninstall)
+		RUNAME="$1"
+		shift
+
+		YES=0
+		if [[ "${1:-}" == "-y" ]]; then
+			YES=1
+			shift
+		fi
+
+		if [[ $# -eq 0 ]]; then
+			if (( YES == 0 )); then
+				echo "Usage: $0 ${RUNAME} <SDK_VERSION> [...]" >&2
+			else
+				echo "Usage: $0 ${RUNAME} -y <SDK_VERSION> [...]" >&2
+			fi
+			exit 1
+		fi
+
+		if (( YES == 0 )); then
+			read -r -p "Remove $* installed macOS SDKs? [y/N] " ANSWER
+
+			case "$ANSWER" in
+				y|Y)
+					;;
+				*)
+					echo "Cancelled."
+					exit 0
+					;;
+			esac
+		fi
+
+		for VERSION in "$@"; do
+			MACOSX_LOG "Remove SDK $1"
+			"${MACOSX_ROOT}/scripts/remove_macosx.sh" "$VERSION"
+		done
+		;;
+
+	allremove)
+		shift
+		YES=0
+		if [[ "${1:-}" == "-y" ]]; then
+			YES=1
+			shift
+		fi
+		if (( YES == 0 )); then
+			read -r -p "Remove all installed macOS SDKs? [y/N] " ANSWER
+			case "$ANSWER" in
+				y|Y)
+					;;
+				*)
+					echo "Cancelled."
+					exit 0
+					;;
+			esac
+		fi
+		MACOSX_SDK_DIR_VERSIONS=("${OSX_SDK}"/*)
+		for VERSION in "${MACOSX_SDK_DIR_VERSIONS[@]}"; do
+			[[ -d "$VERSION" ]] || continue
+			VERSION="$(basename "$VERSION")"
+			MACOSX_LOG "Remove SDK $VERSION"
+			"${MACOSX_ROOT}/scripts/remove_macosx.sh" "$VERSION"
+		done
+		;;
+
+	list)
+		shift
+		PRINT_MACOSX_SDKS
+		;;
+
+	clean)
+		shift
+		rm -rf "${MACOSX_CACHE}"/*
+		;;
+
+	-v|--version)
+		echo "macosx-cross @MACOSX_CROSS_VERSION@ by MrR736 <MrR736@users.github.com>"
+		exit 0
+		;;
+
+	-h|--help)
+		PROGRAM_NAME="macosx-cross"
+		cat >&2 <<EOF
+Usage: $PROGRAM_NAME [-s|--silent] <command> [options] [SDK_VERSION ...]
+
+Options:
+  -s, --silent  Silent mode
+  -y            Skip confirmation prompts
+
+Commands:
+  install       Install macOS SDK
+  reinstall     Reinstall macOS SDK
+  refresh       Refresh macOS SDK metadata/extraction
+  remove        Remove macOS SDK
+  uninstall     Alias for remove
+  allremove     Remove all installed macOS SDKs
+  allrefresh    Refresh all installed macOS SDK metadata/extraction
+  list          List available macOS SDKs
+  clean         Remove cached SDK archives
+  --tool        Copy a tool to the current directory
+
+Examples:
+  $PROGRAM_NAME install 14.5
+  $PROGRAM_NAME install 14.5 15.5
+  $PROGRAM_NAME reinstall 14.5
+  $PROGRAM_NAME reinstall 14.5 15.5
+  $PROGRAM_NAME reinstall -y 14.5
+  $PROGRAM_NAME reinstall -y 14.5 15.5
+  $PROGRAM_NAME refresh 14.5
+  $PROGRAM_NAME refresh 14.5 15.5
+  $PROGRAM_NAME allrefresh
+  $PROGRAM_NAME remove 14.5
+  $PROGRAM_NAME remove 14.5 15.5
+  $PROGRAM_NAME remove -y 14.5
+  $PROGRAM_NAME remove -y 14.5 15.5
+  $PROGRAM_NAME uninstall 14.5
+  $PROGRAM_NAME uninstall 14.5 15.5
+  $PROGRAM_NAME allremove
+  $PROGRAM_NAME allremove -y
+  $PROGRAM_NAME list
+  $PROGRAM_NAME clean
+  $PROGRAM_NAME --tool cmake
+  $PROGRAM_NAME --silent allrefresh
+  $PROGRAM_NAME -s install 14.5 15.5
+EOF
+		exit 0
+		;;
+	*)
+		if [[ $# -eq 0 ]]; then
+			echo "Usage: macosx-cross <command> [options]" >&2
+		else
+			echo "Unknown command: $1" >&2
+		fi
+		echo "Try 'macosx-cross --help' for more information." >&2
+		exit 1
+		;;
+esac

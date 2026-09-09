@@ -1,0 +1,226 @@
+.TH MACOSX-CROSS-CLANG 1 "September 2026" "macosx-cross @MACOSX_CROSS_VERSION@" "macosx-cross"
+.SH NAME
+macosx-cross-@MACOSX_CROSS_CLANG@ \- macOS cross-compiling @MACOSX_CROSS_CLANG_TEXT@ wrapper
+.SH SYNOPSIS
+.B macosx-cross-@MACOSX_CROSS_CLANG@
+.RI [ options ]
+.RI [ @MACOSX_CROSS_CLANG@-options ...]
+.SH DESCRIPTION
+.B macosx-cross-@MACOSX_CROSS_CLANG@
+is a @MACOSX_CROSS_CLANG_TEXT@ wrapper provided by
+.BR macosx-cross (1)
+for cross-compiling software for Apple platforms from a non-macOS host.
+
+The wrapper selects the requested macOS SDK, configures the appropriate
+Apple target and sysroot, and invokes
+.BR @MACOSX_CROSS_CLANG@ (1)
+with the LLVM LLD linker.
+
+The SDK must have been installed and initialized by
+.BR macosx-cross .
+.SH OPTIONS
+.TP
+.BI --macosx-cross-path
+Print the macosx-cross installation directory and exit.
+
+.TP
+.BI --macosx-sdk=VERSION
+Select the macOS SDK version.
+
+.TP
+.BI --macosx-sdk " VERSION"
+Select the macOS SDK version.
+
+.TP
+.BI --target=TARGET
+Select the Apple target triple.
+
+.TP
+.BI --target " TARGET"
+Select the Apple target triple.
+
+.SH TARGETS
+Targets are obtained from the SDK metadata.
+
+For macOS targets, the target has the form:
+
+.PP
+.EX
+ARCH-apple-darwin
+.EE
+
+For iOS targets:
+
+.PP
+.EX
+ARCH-apple-ios
+.EE
+
+For iOS Simulator / Mac Catalyst targets:
+
+.PP
+.EX
+ARCH-apple-ios-macabi
+.EE
+
+Only architectures supported by the selected SDK are accepted.
+
+.SH ENVIRONMENT
+.TP
+.B MACOSX_SDK_VERSION
+Default SDK version when
+.B --macosx-sdk
+is not specified.
+
+.TP
+.B MACOSX_TARGET
+Default target triple when
+.B --target
+is not specified.
+
+.TP
+.B MACOSX_DEPLOYMENT_TARGET
+Deployment target used for macOS builds.
+
+If unset, it defaults to the selected SDK version.
+
+.TP
+.B IPHONEOS_DEPLOYMENT_TARGET
+Deployment target used for iOS and Mac Catalyst builds.
+
+If unset, it defaults to the selected SDK version.
+
+.TP
+.B SYSTEM_FRAMEWORK_SEARCH_PATHS
+Additional system framework search path.
+
+The value is passed to @MACOSX_CROSS_CLANG_TEXT@ using the
+.B -F
+option.
+
+.TP
+.B FRAMEWORK_SEARCH_PATHS
+Framework search path passed to @MACOSX_CROSS_CLANG_TEXT@ using the
+.B -F
+option.
+
+.TP
+.B KASAN_DEFAULT_CFLAGS
+Default CFLAGS used by the wrapper when KASAN flags are configured.
+
+.TP
+.B KASAN_DEFAULT_CFLAGS_ARM64
+Default CFLAGS used for
+.B arm64
+and
+.B arm64e
+targets when configured.
+
+.SH CLANG
+After processing its own options,
+.B macosx-cross-@MACOSX_CROSS_CLANG@
+passes all remaining arguments directly to
+.BR @MACOSX_CROSS_CLANG@ (1).
+
+The wrapper invokes @MACOSX_CROSS_CLANG_TEXT@ with options equivalent to:
+
+.PP
+.EX
+@MACOSX_CROSS_CLANG@ \\
+    --target=TARGET \\
+    --sysroot=SDK \\
+    -fuse-ld=lld \\
+    -Wno-unused-command-line-argument
+.EE
+
+Additional framework search paths and configured default CFLAGS are also
+passed when available.
+
+.SH EXAMPLES
+Compile a C source file for macOS:
+
+.PP
+.EX
+macosx-cross-@MACOSX_CROSS_CLANG@ \\
+    --macosx-sdk 14.5 \\
+    --target x86_64-apple-darwin \\
+    -c hello.@MACOSX_CROSS_CLANG_FILE@ \\
+    -o hello.o
+.EE
+
+.PP
+Compile for Apple Silicon:
+
+.PP
+.EX
+macosx-cross-@MACOSX_CROSS_CLANG@ \\
+    --macosx-sdk 14.5 \\
+    --target arm64-apple-darwin \\
+    -c hello.@MACOSX_CROSS_CLANG_FILE@ \\
+    -o hello.o
+.EE
+
+.PP
+Compile and link:
+
+.PP
+.EX
+macosx-cross-@MACOSX_CROSS_CLANG@ \\
+    --macosx-sdk 14.5 \\
+    --target arm64-apple-darwin \\
+    hello.@MACOSX_CROSS_CLANG_FILE@ \\
+    -o hello
+.EE
+
+.PP
+Use environment variables instead of command-line options:
+
+.PP
+.EX
+MACOSX_SDK_VERSION=14.5 \\
+MACOSX_TARGET=arm64-apple-darwin \\
+macosx-cross-@MACOSX_CROSS_CLANG@ hello.@MACOSX_CROSS_CLANG_FILE@ -o hello
+.EE
+
+.PP
+Display the macosx-cross installation path:
+
+.PP
+.EX
+macosx-cross-@MACOSX_CROSS_CLANG@ --macosx-cross-path
+.EE
+
+.SH FILES
+.TP
+.I @MACOSX_CROSS_LIBDIR@/
+macosx-cross installation directory.
+
+.TP
+.I @MACOSX_CROSS_LIBDIR@/MacOSX.sdk/
+Installed macOS SDK directory.
+
+.TP
+.I @MACOSX_CROSS_LIBDIR@/MacOSX.sdk/VERSION/.metadata
+Metadata for an installed SDK.
+
+.SH EXIT STATUS
+.TP
+.B 0
+Successful execution.
+
+.TP
+.B non-zero
+An error occurred, the requested SDK or target is invalid, or @MACOSX_CROSS_CLANG_TEXT@
+returned an error.
+
+.SH SEE ALSO
+.BR @MACOSX_CROSS_CLANG@ (1),
+.BR lld (1),
+.BR macosx-cross (1)
+
+.SH AUTHOR
+MrR736 <MrR736@users.github.com>
+.SH COPYRIGHT
+Copyright \(co 2026 MrR736.
+.br
+Licensed under the GNU General Public License, version 3 or later.

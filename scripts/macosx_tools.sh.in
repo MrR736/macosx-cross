@@ -1,0 +1,356 @@
+#!/usr/bin/env bash
+
+set -eu
+
+MACOSX_CHECK_INTERNET() {
+	if curl -fsS --connect-timeout 3 --max-time 5 https://www.google.com >/dev/null 2>&1; then
+		return 0
+	else
+		return 1
+	fi
+}
+
+ROOT="@CMAKE_INSTALL_PREFIX@"
+MACOSX_ROOT="@MACOSX_CROSS_LIBDIR@"
+MACOSX_CACHE="${MACOSX_ROOT}/cache"
+OSX_SDK="${MACOSX_ROOT}/MacOSX.sdk"
+MACOSX_CFLAGS="@MACOSX_CFLAGS@"
+MACOSX_CXXFLAGS="@MACOSX_CXXFLAGS@"
+
+mkdir -p ${MACOSX_CACHE}
+
+MACOSX_SILENT=0
+
+SET_MACOSX_LOG() {
+	MACOSX_SILENT=$((1 - MACOSX_SILENT))
+}
+
+CHECK_MACOSX_LOG() {
+	(( MACOSX_SILENT == 0 ))
+}
+
+MACOSX_LOG() {
+	if CHECK_MACOSX_LOG; then
+		echo "$@"
+	fi
+}
+
+DIE() {
+	echo "macosx-cross: Error: $*" >&2
+	exit 1
+}
+
+WARN() {
+	echo "macosx-cross: Warning: $*" >&2
+}
+
+if MACOSX_CHECK_INTERNET; then
+	rm -f "${MACOSX_CACHE}/macosx.tags" "${MACOSX_CACHE}/macosx_sdks.json"
+	MACOSX_LOG "Downloading macOS SDK metadata..."
+	curl -fsSL https://api.github.com/repos/joseluisq/macosx-sdks/tags |
+		grep '"name":' | sed -E 's/.*"name": "([^"]+)".*/\1/' > "${MACOSX_CACHE}/macosx.tags"
+	curl -fsSL \
+		"https://raw.githubusercontent.com/joseluisq/macosx-sdks/refs/heads/master/macosx_sdks.json" > "${MACOSX_CACHE}/macosx_sdks.json"
+elif [[ ! -f "${MACOSX_CACHE}/macosx.tags" || ! -f "${MACOSX_CACHE}/macosx_sdks.json" ]]; then
+	DIE " macOS SDK metadata Is Missing and Internet Is OFF."
+fi
+
+MACOSX_SDK_VERSIONS=()
+while IFS= read -r VERSION; do
+	MACOSX_SDK_VERSIONS+=("$VERSION")
+done < "${MACOSX_CACHE}/macosx.tags"
+
+MACOSX_SDKS_JSON="$(<"${MACOSX_CACHE}/macosx_sdks.json")"
+
+COPY_TOOL() {
+	local TOOL="$2"
+	local TOOL_PATH="${MACOSX_ROOT}/tools/${TOOL}"
+	if [[ -z "$TOOL" ]]; then
+		echo "Usage: $1 --tool <TOOL>" >&2
+		exit 1
+	fi
+	if [[ ! -d "$TOOL_PATH" && ! -L "$TOOL_PATH" ]]; then
+		echo "Tool not found: ${TOOL}" >&2
+		exit 1
+	fi
+	cp -a "$TOOL_PATH" "$PWD/"
+	# Make the copied tool owned by the invoking user.
+	chown -R "$(id -u):$(id -g)" "$PWD/${TOOL}"
+}
+
+IF_MACOSX_VERSION() {
+	for VERSION in "${MACOSX_SDK_VERSIONS[@]}"; do
+		if [[ "$1" == "$VERSION" ]]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+IF_MACOSX_VERSION_DIR() {
+	if [[ -f "${OSX_SDK}/$1/.metadata" ]]; then
+		return 0
+	fi
+	return 1
+}
+
+IF_ARRAY_ITEM() {
+	local ITEM="$1"
+	shift
+	local ARRAY_ITEM
+	for ARRAY_ITEM in "$@"; do
+		if [[ "$ARRAY_ITEM" == "$ITEM" ]]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+GET_MACOSX_SDK_INFO() {
+	local VERSION="$1"
+	jq -e \
+		--arg version "$VERSION" \
+		'.[] | select(.version | endswith($version))' \
+		<<< "$MACOSX_SDKS_JSON"
+}
+
+PRINT_MACOSX_SDKS() {
+	echo "                 macOS SDKs"
+	echo "────────────────────────────────────────────"
+
+	jq -r '
+		.[] |
+		"\(.version)\tDarwin \(.darwin)\t\(.architectures | join(","))"
+	' <<< "$MACOSX_SDKS_JSON" | column -s $'\t' -t
+}
+
+CONVERT_SDK_SETTINGS_PLIST_TO_JSON() {
+	local SDK="$1"
+	local SDK_VERSION="$2"
+
+	local PLIST="${SDK}/SDKSettings.plist"
+	local JSON="${SDK}/SDKSettings.json"
+
+	[[ -f "$PLIST" ]] || {
+		echo "SDKSettings.plist not found: $PLIST" >&2
+		return 1
+	}
+
+	local SDK_INFO
+	SDK_INFO="$(GET_MACOSX_SDK_INFO "$SDK_VERSION")" || {
+		echo "Unable to get SDK information: $SDK_VERSION" >&2
+		return 1
+	}
+
+	[[ -n "$SDK_INFO" ]] || {
+		echo "No SDK information found: $SDK_VERSION" >&2
+		return 1
+	}
+
+	local ARCHITECTURES
+	ARCHITECTURES="$(jq -c -er '.architectures' <<< "$SDK_INFO")" || {
+		echo "Invalid SDK information: missing architectures" >&2
+		return 1
+	}
+
+	local DARWIN_VERSION
+	DARWIN_VERSION="$(jq -r -er '.darwin' <<< "$SDK_INFO")" || {
+		echo "Invalid SDK information: missing darwin version" >&2
+		return 1
+	}
+
+	local SDK_VERSION_VALUE
+	SDK_VERSION_VALUE="$(jq -r -er '.version' <<< "$SDK_INFO")" || {
+		echo "Invalid SDK information: missing version" >&2
+		return 1
+	}
+
+	python3 - "$PLIST" "$JSON" "$ARCHITECTURES" "$DARWIN_VERSION" "$SDK_VERSION_VALUE" <<'PY'
+import json
+import plistlib
+import sys
+
+plist_file = sys.argv[1]
+json_file = sys.argv[2]
+architectures = json.loads(sys.argv[3])
+darwin_version = sys.argv[4]
+sdk_version = sys.argv[5]
+
+# ------------------------------------------------------------
+# Read SDKSettings.plist
+# ------------------------------------------------------------
+with open(plist_file, "rb") as f:
+	data = f.read()
+
+# Some copied/generated SDK files contain escaped XML.
+data = data.replace(b"\\<", b"<")
+
+# Fix malformed Markdown-formatted Apple plist DTD URLs.
+data = data.replace(
+	b"[http://www.apple.com/DTDs/PropertyList-1.0.dtd]"
+	b"(http://www.apple.com/DTDs/PropertyList-1.0.dtd)",
+	b"http://www.apple.com/DTDs/PropertyList-1.0.dtd",
+)
+
+result = plistlib.loads(data)
+
+# Existing Apple plist information
+default_properties = result.get("DefaultProperties", {})
+deployment_target = default_properties.get("MACOSX_DEPLOYMENT_TARGET",sdk_version,)
+
+# Normalize KASAN properties
+#
+# Modern SDKs already provide these properties.
+# Older SDKs, such as macOS 10.9, do not.
+#
+# Preserve Apple's values when present, otherwise use
+# empty strings so consumers can safely load the metadata.
+default_properties.setdefault("KASAN_CFLAGS_CLASSIC","",)
+default_properties.setdefault("KASAN_CFLAGS_TBI","",)
+result["DefaultProperties"] = default_properties
+
+# Build normalized SupportedTargets.macosx
+supported_targets = result.setdefault("SupportedTargets",{},)
+macosx = supported_targets.setdefault("macosx",{},)
+
+# The consumer expects "Archs", not "Arches".
+macosx["Archs"] = architectures
+
+# Deployment target.
+macosx["DefaultDeploymentTarget"] = str(deployment_target)
+
+# Name of the environment variable used by clang/xcrun.
+macosx["DeploymentTargetSettingName"] = ("MACOSX_DEPLOYMENT_TARGET")
+
+# LLVM target triple components.
+macosx["LLVMTargetTripleVendor"] = "apple"
+macosx["LLVMTargetTripleSys"] = "darwin"
+
+# macOS does not normally require an LLVM target
+# environment component.
+macosx["LLVMTargetTripleEnvironment"] = ""
+
+# Normalize top-level SDK metadata
+result["SDKVersion"] = sdk_version
+result["DarwinVersion"] = darwin_version
+
+# Write JSON
+with open(json_file, "w", encoding="utf-8") as f:
+	json.dump(result,f,indent=2)
+	f.write("\n")
+PY
+}
+
+GENERATE_MACOSX_SDK_METADATA() {
+	local MACOSX_SDK="$1"
+	local SDK_SETTINGS="${MACOSX_SDK}/SDKSettings.json"
+
+	if [[ ! -f "$SDK_SETTINGS" ]]; then
+		DIE "SDKSettings.json not found: $SDK_SETTINGS"
+	fi
+
+	local KASAN_DEFAULT_CFLAGS
+	KASAN_DEFAULT_CFLAGS="$(jq -er '.DefaultProperties.KASAN_CFLAGS_CLASSIC' "$SDK_SETTINGS")" || {
+		DIE "Invalid SDKSettings.json: missing .DefaultProperties.KASAN_CFLAGS_CLASSIC"
+	}
+
+	KASAN_DEFAULT_CFLAGS="$(printf '%s\n' "$KASAN_DEFAULT_CFLAGS" | sed -E 's/(^| )-fsanitize=[^ ]+//g')"
+
+	local KASAN_DEFAULT_CFLAGS_ARM64
+	KASAN_DEFAULT_CFLAGS_ARM64="$(jq -er '.DefaultProperties.KASAN_CFLAGS_TBI' "$SDK_SETTINGS")" || {
+		DIE "Invalid SDKSettings.json: missing .DefaultProperties.KASAN_CFLAGS_TBI"
+	}
+
+	KASAN_DEFAULT_CFLAGS_ARM64="$(printf '%s\n' "$KASAN_DEFAULT_CFLAGS_ARM64" | sed -E 's/(^| )-fsanitize=[^ ]+//g')"
+
+	local MACOSX_ARCH_LIST=""
+	local IOS_ARCH_LIST=""
+	local IOSMAC_ARCH_LIST=""
+
+	if jq -e '.SupportedTargets.macosx | type == "object"' "$SDK_SETTINGS" >/dev/null; then
+		MACOSX_ARCH_LIST="$(jq -er '.SupportedTargets.macosx.Archs | join(" ")' "$SDK_SETTINGS")" || {
+			DIE "Invalid SDKSettings.json: missing .SupportedTargets.macosx.Archs"
+		}
+	fi
+
+	if jq -e '.SupportedTargets.ios | type == "object"' "$SDK_SETTINGS" >/dev/null; then
+		IOS_ARCH_LIST="$(jq -er '.SupportedTargets.ios.Archs | join(" ")' "$SDK_SETTINGS")" || {
+			DIE "Invalid SDKSettings.json: missing .SupportedTargets.ios.Archs"
+		}
+	fi
+
+	if jq -e '.SupportedTargets.iosmac | type == "object"' "$SDK_SETTINGS" >/dev/null; then
+		IOSMAC_ARCH_LIST="$(jq -er '.SupportedTargets.iosmac.Archs | join(" ")' "$SDK_SETTINGS")" || {
+			DIE "Invalid SDKSettings.json: missing .SupportedTargets.iosmac.Archs"
+		}
+	fi
+
+	local -a MACOSX_TARGETS=()
+
+	local TARGET_NAME
+	for TARGET_NAME in macosx ios iosmac; do
+		if jq -e ".SupportedTargets.${TARGET_NAME} | type == \"object\"" "$SDK_SETTINGS" >/dev/null; then
+			MACOSX_TARGETS+=("$TARGET_NAME")
+		fi
+	done
+
+	local MACOSX_TARGETS_LIST="${MACOSX_TARGETS[*]}"
+	local IOS_UNZIPPERED_TWIN_PREFIX_PATH=""
+
+	if [[ -d "${MACOSX_SDK}/System/iOSSupport" ]]; then
+		IOS_UNZIPPERED_TWIN_PREFIX_PATH="${MACOSX_SDK}/System/iOSSupport"
+	fi
+
+	local -a LIBRARY_SEARCH_PATHS=()
+	if [[ -d "${MACOSX_SDK}/usr/lib" ]]; then
+		LIBRARY_SEARCH_PATHS+=("${MACOSX_SDK}/usr/lib")
+	fi
+
+	local LIBRARY_SEARCH_PATHS_LIST="${LIBRARY_SEARCH_PATHS[*]}"
+	local -a LIBRARY_IOS_SEARCH_PATHS=()
+
+
+	local -a SYSTEM_FRAMEWORK_SEARCH_PATHS=""
+	if [[ -d "${IOS_UNZIPPERED_TWIN_PREFIX_PATH}/System/Library/Frameworks" ]]; then
+		SYSTEM_FRAMEWORK_SEARCH_PATHS="${IOS_UNZIPPERED_TWIN_PREFIX_PATH}/System/Library/Frameworks"
+	fi
+
+	if IF_ARRAY_ITEM "iosmac" "${MACOSX_TARGETS[@]}" && [[ -d "${IOS_UNZIPPERED_TWIN_PREFIX_PATH}/usr/lib" ]]; then
+		LIBRARY_IOS_SEARCH_PATHS+=("${IOS_UNZIPPERED_TWIN_PREFIX_PATH}/usr/lib")
+	fi
+
+	if IF_ARRAY_ITEM "ios" "${MACOSX_TARGETS[@]}" && [[ -d "${MACOSX_SDK}/System/Cryptexes/OS/usr/lib" ]]; then
+		LIBRARY_IOS_SEARCH_PATHS+=("${MACOSX_SDK}/System/Cryptexes/OS/usr/lib")
+	fi
+
+	local LIBRARY_IOS_SEARCH_PATHS_LIST="${LIBRARY_IOS_SEARCH_PATHS[*]}"
+
+	local -a MACOSX_SDK_INCLUDE_DIRS=()
+	if [[ -d "${MACOSX_SDK}/usr/include" ]]; then
+		MACOSX_SDK_INCLUDE_DIRS+=("${MACOSX_SDK}/usr/include")
+	fi
+
+	if [[ -d "${MACOSX_SDK}/System/Library/Frameworks/Kernel.framework/Headers" ]]; then
+		MACOSX_SDK_INCLUDE_DIRS+=("${MACOSX_SDK}/System/Library/Frameworks/Kernel.framework/Headers")
+	fi
+
+	local MACOSX_SDK_INCLUDE_DIRS_LIST="${MACOSX_SDK_INCLUDE_DIRS[*]}"
+
+	cat > "${MACOSX_SDK}/.metadata" <<EOF
+MACOSX_SDK_ARCHS="${MACOSX_ARCH_LIST}"
+MACOSX_SDK_IOS_ARCHS="${IOS_ARCH_LIST}"
+MACOSX_SDK_IOSMAC_ARCHS="${IOSMAC_ARCH_LIST}"
+MACOSX_SDK_TARGETS="${MACOSX_TARGETS_LIST}"
+MACOSX_SDK_INCLUDE_DIR="${MACOSX_SDK}/usr/include"
+LIBRARY_SEARCH_PATHS="${LIBRARY_SEARCH_PATHS_LIST}"
+LIBRARY_IOS_SEARCH_PATHS="${LIBRARY_IOS_SEARCH_PATHS_LIST}"
+FRAMEWORK_SEARCH_PATHS="${MACOSX_SDK}/System/Library/Frameworks"
+SYSTEM_FRAMEWORK_SEARCH_PATHS="${SYSTEM_FRAMEWORK_SEARCH_PATHS}"
+KASAN_DEFAULT_CFLAGS="${KASAN_DEFAULT_CFLAGS}"
+KASAN_DEFAULT_CFLAGS_ARM64="${KASAN_DEFAULT_CFLAGS_ARM64}"
+KERNEL_FRAMEWORK="${MACOSX_SDK}/System/Library/Frameworks/Kernel.framework"
+KERNEL_FRAMEWORK_HEADERS="\${KERNEL_FRAMEWORK}/Headers"
+KERNEL_EXTENSION_HEADER_SEARCH_PATHS="\${KERNEL_FRAMEWORK}/PrivateHeaders \${KERNEL_FRAMEWORK_HEADERS}"
+IOS_UNZIPPERED_TWIN_PREFIX_PATH="${IOS_UNZIPPERED_TWIN_PREFIX_PATH}"
+EOF
+}

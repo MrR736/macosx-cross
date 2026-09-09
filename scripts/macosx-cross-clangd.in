@@ -1,0 +1,384 @@
+#!/usr/bin/env bash
+
+# macosx-cross-clangd
+
+set -euo pipefail
+
+MACOSX_ROOT="@MACOSX_CROSS_LIBDIR@"
+OSX_SDK="${MACOSX_ROOT}/MacOSX.sdk"
+
+MACOSX_SDK_VERSION="${MACOSX_SDK_VERSION:-}"
+MACOSX_TARGET="${MACOSX_TARGET:-}"
+MACOSX_ARCH="${MACOSX_ARCH:-}"
+MACOSX_CLANGD="${MACOSX_CLANGD:-}"
+
+CLANGD=""
+
+declare -a CLANGD_ARGS=()
+
+DIE() {
+	echo "macosx-cross-clangd: error: $*" >&2
+	exit 1
+}
+
+WARN() {
+	echo "macosx-cross-clangd: warning: $*" >&2
+}
+
+IF_ARRAY_ITEM()
+{
+	local ITEM="$1"
+	shift
+
+	local ARRAY_ITEM
+
+	for ARRAY_ITEM in "$@"; do
+		[[ "$ARRAY_ITEM" == "$ITEM" ]] && return 0
+	done
+
+	return 1
+}
+
+HAS_ARG()
+{
+	local ARG="$1"
+	local ITEM
+
+	for ITEM in "${CLANGD_ARGS[@]}"; do
+		[[ "$ITEM" == "$ARG" ]] && return 0
+	done
+
+	return 1
+}
+
+HAS_ARG_PREFIX()
+{
+	local PREFIX="$1"
+	local ITEM
+
+	for ITEM in "${CLANGD_ARGS[@]}"; do
+		[[ "$ITEM" == "$PREFIX"* ]] && return 0
+	done
+
+	return 1
+}
+
+USAGE()
+{
+	cat <<EOF
+Usage:
+  macosx-cross-clangd [options] [clangd-options...]
+
+macOS cross clangd wrapper.
+
+Options:
+  --macosx-sdk=<version>
+      Select the macOS SDK version.
+
+  --target=<triple>
+      Select the Apple target triple.
+
+  --arch=<arch>
+      Select the target architecture.
+
+  --clangd=<path>
+      Use a specific clangd executable.
+
+  --help
+      Show this help.
+
+Environment:
+  MACOSX_SDK_VERSION
+      Default SDK version.
+
+  MACOSX_TARGET
+      Default Apple target triple.
+
+  MACOSX_ARCH
+      Default architecture.
+
+  MACOSX_CLANGD
+      Path to clangd.
+
+Examples:
+
+  macosx-cross-clangd \\
+      --macosx-sdk=10.9 \\
+      --target=x86_64-apple-darwin
+
+  MACOSX_SDK_VERSION=10.9 \\
+  MACOSX_TARGET=x86_64-apple-darwin \\
+      macosx-cross-clangd
+
+  macosx-cross-clangd \\
+      --macosx-sdk=10.9 \\
+      --target=arm64-apple-darwin \\
+      --compile-commands-dir=build
+EOF
+}
+
+FIND_CLANGD()
+{
+	local CANDIDATE
+
+	if [[ -n "$MACOSX_CLANGD" ]]; then
+		[[ -x "$MACOSX_CLANGD" ]] ||
+			DIE "clangd not executable: $MACOSX_CLANGD"
+
+		CLANGD="$MACOSX_CLANGD"
+		return
+	fi
+
+	for CANDIDATE in \
+		clangd-19 \
+		clangd \
+		/usr/bin/clangd-19 \
+		/usr/bin/clangd \
+		/bin/clangd-19 \
+		/bin/clangd
+	do
+		if [[ "$CANDIDATE" == */* ]]; then
+			if [[ -x "$CANDIDATE" ]]; then
+				CLANGD="$CANDIDATE"
+				return
+			fi
+		else
+			if command -v "$CANDIDATE" >/dev/null 2>&1; then
+				CLANGD="$(command -v "$CANDIDATE")"
+				return
+			fi
+		fi
+	done
+
+	DIE "clangd not found"
+}
+
+FIND_CLANG()
+{
+	local CANDIDATE
+
+	for CANDIDATE in \
+		"${MACOSX_ROOT}/bin/macosx-cross-clang" \
+		/bin/macosx-cross-clang /usr/bin/macosx-cross-clang
+	do
+		if [[ -x "$CANDIDATE" ]]; then
+			MACOSX_CLANG="$CANDIDATE"
+			return
+		fi
+	done
+
+	if command -v macosx-cross-clang >/dev/null 2>&1; then
+		MACOSX_CLANG="$(command -v macosx-cross-clang)"
+		return
+	fi
+
+	DIE "macosx-cross-clang not found"
+}
+
+LOAD_METADATA()
+{
+	local METADATA="${OSX_SDK}/.metadata"
+
+	if [[ ! -f "$METADATA" ]]; then
+		WARN "SDK metadata not found: $METADATA"
+		return
+	fi
+
+	# shellcheck disable=SC1090
+	source "$METADATA"
+}
+
+GET_SDK_VERSION()
+{
+	local VERSION
+
+	if [[ -n "$MACOSX_SDK_VERSION" ]]; then
+		printf '%s\n' "$MACOSX_SDK_VERSION"
+		return
+	fi
+
+	if [[ -n "${SDK_VERSION:-}" ]]; then
+		printf '%s\n' "$SDK_VERSION"
+		return
+	fi
+
+	VERSION="${OSX_SDK##*/}"
+
+	printf '%s\n' "$VERSION"
+}
+
+GET_ARCH_FROM_TARGET()
+{
+	case "$MACOSX_TARGET" in
+		x86_64-*)
+			printf '%s\n' "x86_64"
+			;;
+
+		arm64-*)
+			printf '%s\n' "arm64"
+			;;
+
+		arm64e-*)
+			printf '%s\n' "arm64e"
+			;;
+
+		arm-*)
+			printf '%s\n' "arm"
+			;;
+
+		i386-*)
+			printf '%s\n' "i386"
+			;;
+
+		*)
+			return 1
+			;;
+	esac
+}
+
+GET_PLATFORM()
+{
+	case "$MACOSX_TARGET" in
+		*-apple-ios-macabi*)
+			printf '%s\n' "mac-catalyst"
+			;;
+
+		*-apple-ios*)
+			printf '%s\n' "ios"
+			;;
+
+		*-apple-darwin*)
+			printf '%s\n' "macos"
+			;;
+
+		*)
+			DIE "unsupported Apple target: $MACOSX_TARGET"
+			;;
+	esac
+}
+
+GET_DEPLOYMENT_TARGET()
+{
+	local PLATFORM="$1"
+
+	case "$PLATFORM" in
+		macos)
+			printf '%s\n' \
+				"${MACOSX_DEPLOYMENT_TARGET:-$MACOSX_SDK_VERSION}"
+			;;
+
+		ios|mac-catalyst)
+			printf '%s\n' \
+				"${IPHONEOS_DEPLOYMENT_TARGET:-$MACOSX_SDK_VERSION}"
+			;;
+
+		*)
+			DIE "unknown platform: $PLATFORM"
+			;;
+	esac
+}
+# Parse arguments.
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		--macosx-sdk=*)
+			MACOSX_SDK_VERSION="${1#*=}"
+			;;
+
+		--target=*)
+			MACOSX_TARGET="${1#*=}"
+			;;
+
+		--arch=*)
+			MACOSX_ARCH="${1#*=}"
+			;;
+
+		--clangd=*)
+			MACOSX_CLANGD="${1#*=}"
+			;;
+
+		--help|-h)
+			USAGE
+			exit 0
+			;;
+
+		*)
+			CLANGD_ARGS+=("$1")
+			;;
+	esac
+
+	shift
+done
+# Validate target.
+[[ -n "$MACOSX_TARGET" ]] ||
+	DIE "missing --target and MACOSX_TARGET is not set"
+# Resolve SDK.
+if [[ -n "$MACOSX_SDK_VERSION" ]]; then
+	OSX_SDK="${MACOSX_ROOT}/MacOSX.sdk/${MACOSX_SDK_VERSION}"
+else
+	if [[ ! -d "$OSX_SDK" ]]; then
+		DIE "MacOSX SDK root not found: $OSX_SDK"
+	fi
+fi
+
+[[ -d "$OSX_SDK" ]] ||
+	DIE "SDK not found: $OSX_SDK"
+# Load SDK metadata.
+LOAD_METADATA
+
+if [[ -z "$MACOSX_SDK_VERSION" ]]; then
+	MACOSX_SDK_VERSION="$(GET_SDK_VERSION)"
+fi
+# Determine architecture/platform/deployment.
+if [[ -z "$MACOSX_ARCH" ]]; then
+	if ! MACOSX_ARCH="$(GET_ARCH_FROM_TARGET)"; then
+		DIE "cannot determine architecture from target: $MACOSX_TARGET"
+	fi
+fi
+
+MACOSX_PLATFORM="$(GET_PLATFORM)"
+
+MACOSX_DEPLOYMENT="$(GET_DEPLOYMENT_TARGET "$MACOSX_PLATFORM")"
+# Set the same deployment environment used by macosx-cross-clang/lld.
+case "$MACOSX_PLATFORM" in
+	macos)
+		export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-$MACOSX_DEPLOYMENT}"
+		;;
+
+	ios|mac-catalyst)
+		export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-$MACOSX_DEPLOYMENT}"
+		;;
+esac
+
+export MACOSX_SDK_VERSION
+export MACOSX_TARGET
+export MACOSX_ARCH
+export MACOSX_SDK="$OSX_SDK"
+
+# Find clang and clangd.
+FIND_CLANG
+FIND_CLANGD
+
+# Tell clangd which compiler driver it is allowed to execute.
+#
+# clangd uses --query-driver to obtain system include paths from a
+# GCC-compatible compiler driver.  Our macosx-cross-clang wrapper already
+# knows how to construct the selected Apple SDK environment.
+if ! HAS_ARG_PREFIX "--query-driver="; then
+	CLANGD_ARGS+=("--query-driver=${MACOSX_CLANG}")
+fi
+
+# Export the compiler wrapper path as well.
+export MACOSX_CLANG
+
+# Run clangd.
+exec -a "macosx-cross-clangd" \
+	env \
+		MACOSX_SDK_VERSION="$MACOSX_SDK_VERSION" \
+		MACOSX_TARGET="$MACOSX_TARGET" \
+		MACOSX_ARCH="$MACOSX_ARCH" \
+		MACOSX_SDK="$OSX_SDK" \
+		MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-}" \
+		IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-}" \
+		MACOSX_CLANG="$MACOSX_CLANG" \
+		"$CLANGD" \
+		"${CLANGD_ARGS[@]}"

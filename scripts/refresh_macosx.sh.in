@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+. @MACOSX_CROSS_LIBDIR@/scripts/macosx_tools.sh
+
+MACOSX_SDK_VERSION="${1:-}"
+
+if ! IF_MACOSX_VERSION_DIR "$MACOSX_SDK_VERSION"; then
+	DIE "Invalid macOS SDK version: $MACOSX_SDK_VERSION"
+fi
+
+MACOSX_SDK="${OSX_SDK}/${MACOSX_SDK_VERSION}"
+if [[ -f "${MACOSX_SDK}/.metadata" ]]; then
+	rm -f "${MACOSX_SDK}/.metadata"
+	GENERATE_MACOSX_SDK_METADATA "${MACOSX_SDK}"
+fi
+

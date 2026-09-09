@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+. @MACOSX_CROSS_LIBDIR@/scripts/macosx_tools.sh
+
+MACOSX_SDK_VERSION="${1:-}"
+
+if ! IF_MACOSX_VERSION "$MACOSX_SDK_VERSION"; then
+	DIE "Invalid macOS SDK version: $MACOSX_SDK_VERSION"
+fi
+
+MACOSX_SDK_URL="$(
+	printf '%s' "$MACOSX_SDKS_JSON" |
+		jq -er --arg version "$MACOSX_SDK_VERSION" \
+			'.[] | select(.version == ("macOS " + $version) or .version == ("OS X " + $version)) | .github_download_url'
+)"
+
+MACOSX_SDK_FILE="$(basename "$MACOSX_SDK_URL")"
+MACOSX_SDK="${OSX_SDK}/${MACOSX_SDK_VERSION}"
+SDK_SETTINGS="${MACOSX_SDK}/SDKSettings.json"
+
+mkdir -p "${MACOSX_CACHE}"
+
+if [[ ! -f "${MACOSX_SDK}/.metadata" ]]; then
+	mkdir -p "${MACOSX_SDK}"
+
+	if [[ ! -f "${MACOSX_CACHE}/${MACOSX_SDK_FILE}" ]]; then
+		MACOSX_LOG "Downloading macOS ${MACOSX_SDK_VERSION} SDK..."
+		MACOSX_LOG "URL: ${MACOSX_SDK_URL}"
+		if CHECK_MACOSX_LOG; then
+			curl -fL  --progress-bar \
+				-o "${MACOSX_CACHE}/${MACOSX_SDK_FILE}" \
+				"${MACOSX_SDK_URL}"
+		else
+			curl -fLsS \
+				-o "${MACOSX_CACHE}/${MACOSX_SDK_FILE}" \
+				"${MACOSX_SDK_URL}"
+		fi
+	fi
+
+	MACOSX_LOG "Extracting macOS ${MACOSX_SDK_VERSION} SDK..."
+	if ! tar -xf "${MACOSX_CACHE}/${MACOSX_SDK_FILE}" -C "${MACOSX_SDK}" --strip-components=1; then
+		rm -rf "${MACOSX_SDK}"
+		DIE "Failed to extract macOS ${MACOSX_SDK_VERSION} SDK"
+	fi
+
+	if [[ -f "${MACOSX_SDK}/SDKSettings.plist" && ! -f "${SDK_SETTINGS}" ]]; then
+		CONVERT_SDK_SETTINGS_PLIST_TO_JSON "$MACOSX_SDK" "$MACOSX_SDK_VERSION"
+	fi
+
+	if [[ ! -f "${SDK_SETTINGS}" ]]; then
+		rm -rf "${MACOSX_SDK}"
+		DIE "SDKSettings.json not found after extraction"
+	fi
+
+	GENERATE_MACOSX_SDK_METADATA "${MACOSX_SDK}"
+fi
+

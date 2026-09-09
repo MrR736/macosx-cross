@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+
+# macosx-cross-@MACOSX_CROSS_CLANG@
+
+set -eu
+
+MACOSX_ROOT="@MACOSX_CROSS_LIBDIR@"
+MACOSX_CACHE="${MACOSX_ROOT}/cache"
+OSX_SDK="${MACOSX_ROOT}/MacOSX.sdk"
+
+MACOSX_SDK_VERSION="${MACOSX_SDK_VERSION:-}"
+MACOSX_TARGET="${MACOSX_TARGET:-}"
+
+IF_ARRAY_ITEM() {
+	local ITEM="$1"
+	shift
+	local ARRAY_ITEM
+	for ARRAY_ITEM in "$@"; do
+		if [[ "$ARRAY_ITEM" == "$ITEM" ]]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		--macosx-cross-path)
+			echo "${MACOSX_ROOT}"
+			exit 0
+			;;
+
+		--macosx-sdk=*)
+			MACOSX_SDK_VERSION="${1#--macosx-sdk=}"
+			shift
+			;;
+
+		--macosx-sdk)
+			if [[ $# -lt 2 ]]; then
+				echo "Missing argument for --macosx-sdk" >&2
+				exit 1
+			fi
+
+			MACOSX_SDK_VERSION="$2"
+			shift 2
+			;;
+
+		--target=*)
+			MACOSX_TARGET="${1#--target=}"
+			shift
+			;;
+
+		--target)
+			if [[ $# -lt 2 ]]; then
+				echo "Missing argument for --target" >&2
+				exit 1
+			fi
+
+			MACOSX_TARGET="$2"
+			shift 2
+			;;
+
+		*)
+			break
+			;;
+	esac
+done
+
+MACOSX_ARCH="${MACOSX_TARGET%%-*}"
+MACOSX_SDK="${OSX_SDK}/${MACOSX_SDK_VERSION}"
+MACOSX_SDK_METADATA="${MACOSX_SDK}/.metadata"
+
+if [[ -z "$MACOSX_SDK_VERSION" ]]; then
+	echo "Missing --macosx-sdk" >&2
+	exit 1
+fi
+
+if [[ ! -f "$MACOSX_SDK_METADATA" ]]; then
+	echo "Invalid macOS SDK version: $MACOSX_SDK_VERSION" >&2
+	exit 1
+fi
+
+. "$MACOSX_SDK_METADATA"
+
+MACOSX_TARGETS=()
+
+if [[ -n "$MACOSX_SDK_ARCHS" ]]; then
+	read -r -a ARCHS <<< "$MACOSX_SDK_ARCHS"
+	for arch in "${ARCHS[@]}"; do
+		MACOSX_TARGETS+=("${arch}-apple-darwin")
+	done
+fi
+
+if [[ -n "$MACOSX_SDK_IOS_ARCHS" ]]; then
+	read -r -a ARCHS <<< "$MACOSX_SDK_IOS_ARCHS"
+	for arch in "${ARCHS[@]}"; do
+		MACOSX_TARGETS+=("${arch}-apple-ios")
+	done
+fi
+
+if [[ -n "$MACOSX_SDK_IOSMAC_ARCHS" ]]; then
+	read -r -a ARCHS <<< "$MACOSX_SDK_IOSMAC_ARCHS"
+	for arch in "${ARCHS[@]}"; do
+		MACOSX_TARGETS+=("${arch}-apple-ios-macabi")
+	done
+fi
+
+if [[ -z "$MACOSX_TARGET" ]]; then
+	echo "Missing --target" >&2
+	echo "List Target"
+	printf '%s\n' "${MACOSX_TARGETS[@]}"
+	exit 1
+fi
+
+if ! IF_ARRAY_ITEM "$MACOSX_TARGET" "${MACOSX_TARGETS[@]}"; then
+	echo "Unsupported target: $MACOSX_TARGET" >&2
+	exit 1
+fi
+
+case "$MACOSX_TARGET" in
+	*-apple-darwin)
+		MACOSX_SUPPORTED_ARCHS="$MACOSX_SDK_ARCHS"
+		export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-$MACOSX_SDK_VERSION}"
+		;;
+
+	*-apple-ios*-macabi)
+		MACOSX_SUPPORTED_ARCHS="$MACOSX_SDK_IOSMAC_ARCHS"
+		export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-$MACOSX_SDK_VERSION}"
+		;;
+
+	*-apple-ios)
+		MACOSX_SUPPORTED_ARCHS="$MACOSX_SDK_IOS_ARCHS"
+		export IPHONEOS_DEPLOYMENT_TARGET="${IPHONEOS_DEPLOYMENT_TARGET:-$MACOSX_SDK_VERSION}"
+		;;
+
+	*)
+		echo "Unsupported target: $MACOSX_TARGET" >&2
+		exit 1
+		;;
+esac
+
+if ! IF_ARRAY_ITEM "$MACOSX_ARCH" $MACOSX_SUPPORTED_ARCHS; then
+	echo "Architecture '${MACOSX_ARCH}' is not supported for target '${MACOSX_TARGET}' by macOS SDK ${MACOSX_SDK_VERSION}" >&2
+	exit 1
+fi
+
+MACOSX_DEFAULT_CFLAGS=""
+
+if [ -n "$KASAN_DEFAULT_CFLAGS" ]; then
+	MACOSX_DEFAULT_CFLAGS="$KASAN_DEFAULT_CFLAGS"
+fi
+
+if [ -n "$KASAN_DEFAULT_CFLAGS_ARM64" ] && [[ "$MACOSX_ARCH" == "arm64" || "$MACOSX_ARCH" == "arm64e" ]]; then
+	MACOSX_DEFAULT_CFLAGS="$KASAN_DEFAULT_CFLAGS_ARM64"
+fi
+
+F_SYSTEM_FRAMEWORK=""
+if [ -n "$SYSTEM_FRAMEWORK_SEARCH_PATHS" ]; then
+	F_SYSTEM_FRAMEWORK="-F$SYSTEM_FRAMEWORK_SEARCH_PATHS"
+fi
+
+exec -a "macosx-cross-@MACOSX_CROSS_CLANG@" @MACOSX_CROSS_CLANG@ --target="$MACOSX_TARGET" --sysroot="$MACOSX_SDK" @MACOSX_CFLAGS@  ${F_SYSTEM_FRAMEWORK} -F"${FRAMEWORK_SEARCH_PATHS}" ${MACOSX_DEFAULT_CFLAGS} "$@"

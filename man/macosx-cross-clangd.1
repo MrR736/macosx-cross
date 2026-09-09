@@ -1,0 +1,295 @@
+.TH MACOSX-CROSS-CLANGD 1 "2026-09-09" "macosx-cross @MACOSX_CROSS_VERSION@" "macOS Cross Development Tools"
+.SH NAME
+macosx-cross-clangd \- clangd wrapper for macOS cross development
+.SH SYNOPSIS
+.B macosx-cross-clangd
+.RI [ options ]
+.RI [ clangd-options... ]
+.SH DESCRIPTION
+.B macosx-cross-clangd
+is a wrapper around
+.BR clangd (1)
+for C and C++ development targeting Apple platforms from a non-Apple host.
+
+It selects a macOS SDK, determines the target architecture and platform,
+sets the appropriate deployment target environment, and invokes
+.BR clangd (1)
+with the macOS cross compiler supplied by
+.BR macosx-cross-clang (1).
+
+The wrapper is intended for use with editor and language-server integrations
+such as compile_commands.json based development environments.
+.SH OPTIONS
+.TP
+.BI --macosx-sdk= version
+Select the macOS SDK version.
+
+If omitted, the value of
+.B MACOSX_SDK_VERSION
+is used. If neither is set, the default SDK root is used.
+
+.TP
+.BI --target= triple
+Select the Apple target triple.
+
+Examples include:
+.BR x86_64-apple-darwin ,
+.BR arm64-apple-darwin ,
+and
+.BR arm64-apple-ios-macabi .
+
+.TP
+.BI --arch= arch
+Explicitly select the target architecture.
+
+If omitted, the architecture is inferred from
+.B --target .
+
+Supported architectures include
+.BR x86_64 ,
+.BR arm64 ,
+.BR arm64e ,
+.BR arm ,
+and
+.BR i386 .
+
+.TP
+.BI --clangd= path
+Use the specified
+.BR clangd (1)
+executable instead of automatically locating one.
+
+.TP
+.BR --help ", " -h
+Display usage information and exit.
+
+.PP
+All other arguments are passed directly to
+.BR clangd (1).
+.SH TARGET PLATFORMS
+The target platform is determined from the Apple target triple.
+
+.TP
+.B *-apple-darwin*
+Selects the macOS platform.
+
+.TP
+.B *-apple-ios*
+Selects the iOS platform.
+
+.TP
+.B *-apple-ios-macabi*
+Selects the Mac Catalyst platform.
+.SH DEPLOYMENT TARGET
+For macOS targets, the deployment target is obtained from
+.B MACOSX_DEPLOYMENT_TARGET
+or, if unset, from the selected SDK version.
+
+For iOS and Mac Catalyst targets, the deployment target is obtained from
+.B IPHONEOS_DEPLOYMENT_TARGET
+or, if unset, from the selected SDK version.
+
+The selected deployment target is exported before
+.BR clangd (1)
+is started.
+.SH QUERY DRIVER
+If no
+.B --query-driver=
+option is supplied,
+.B macosx-cross-clangd
+automatically adds:
+
+.PP
+.nf
+--query-driver=<macosx-cross-clang>
+.fi
+.PP
+
+This allows
+.BR clangd (1)
+to query the cross compiler for compiler-provided system include paths.
+
+The compiler is the
+.B macosx-cross-clang
+wrapper selected by the installation.
+.SH ENVIRONMENT
+.TP
+.B MACOSX_SDK_VERSION
+Default SDK version.
+
+.TP
+.B MACOSX_TARGET
+Default Apple target triple.
+
+.TP
+.B MACOSX_ARCH
+Default target architecture.
+
+.TP
+.B MACOSX_CLANGD
+Path to the
+.BR clangd (1)
+executable.
+
+.TP
+.B MACOSX_DEPLOYMENT_TARGET
+Deployment target for macOS.
+
+.TP
+.B IPHONEOS_DEPLOYMENT_TARGET
+Deployment target for iOS and Mac Catalyst.
+
+.SH SDK METADATA
+If the selected SDK contains a
+.B .metadata
+file, it is sourced before SDK and deployment information is resolved.
+
+The metadata may provide
+.B SDK_VERSION
+and other SDK-specific configuration used by the macOS cross-toolchain.
+.SH CLANGD SELECTION
+Unless
+.B MACOSX_CLANGD
+or
+.B --clangd=
+is specified, the following executables are searched:
+
+.PP
+.nf
+clangd-19
+clangd
+/usr/bin/clangd-19
+/usr/bin/clangd
+/bin/clangd-19
+/bin/clangd
+.fi
+
+The first executable found is used.
+.SH COMPILER SELECTION
+The wrapper searches for
+.B macosx-cross-clang
+in the following locations:
+
+.PP
+.nf
+/bin/macosx-cross-clang
+/usr/bin/macosx-cross-clang
+.fi
+
+If none of these paths exists, the command is searched for using
+.BR command (1).
+.SH ARGUMENT PASSING
+Arguments not recognized by
+.B macosx-cross-clangd
+are passed unchanged to
+.BR clangd (1).
+
+For example:
+
+.PP
+.nf
+macosx-cross-clangd \\
+    --target=x86_64-apple-darwin \\
+    --compile-commands-dir=build
+.fi
+.SH EXAMPLES
+.TP
+Select an SDK and macOS target:
+.PP
+.nf
+macosx-cross-clangd \\
+    --macosx-sdk=10.9 \\
+    --target=x86_64-apple-darwin
+.fi
+
+.TP
+Use environment variables:
+.PP
+.nf
+MACOSX_SDK_VERSION=10.9 \\
+MACOSX_TARGET=x86_64-apple-darwin \\
+    macosx-cross-clangd
+.fi
+
+.TP
+Use an ARM64 macOS target:
+.PP
+.nf
+macosx-cross-clangd \\
+    --macosx-sdk=10.9 \\
+    --target=arm64-apple-darwin
+.fi
+
+.TP
+Specify a compilation database:
+.PP
+.nf
+macosx-cross-clangd \\
+    --macosx-sdk=10.9 \\
+    --target=arm64-apple-darwin \\
+    --compile-commands-dir=build
+.fi
+
+.TP
+Use a specific clangd executable:
+.PP
+.nf
+macosx-cross-clangd \\
+    --target=x86_64-apple-darwin \\
+    --clangd=/opt/llvm/bin/clangd
+.fi
+
+.SH FILES
+.TP
+.I @MACOSX_CROSS_LIBDIR@/MacOSX.sdk
+Default macOS SDK installation root.
+
+.TP
+.I @MACOSX_CROSS_LIBDIR@/MacOSX.sdk/<version>
+Versioned macOS SDK.
+
+.TP
+.I @MACOSX_CROSS_LIBDIR@/MacOSX.sdk/<version>/.metadata
+SDK metadata.
+
+.TP
+.I /bin/macosx-cross-clang
+Cross compiler wrapper.
+
+.SH EXIT STATUS
+.TP
+.B 0
+Successful execution of
+.BR clangd (1)
+or successful display of help.
+
+.TP
+.B non-zero
+An error occurred while selecting the SDK, target, compiler, clangd,
+or while executing
+.BR clangd (1).
+.SH NOTES
+The wrapper does not implement a language server itself. It configures the
+cross-compilation environment and delegates all language-server processing
+to
+.BR clangd (1).
+
+The
+.B --query-driver
+option is automatically added only when the user has not supplied a
+.B --query-driver=
+option.
+
+The selected target must contain an Apple platform triple recognized by the
+wrapper.
+.SH SEE ALSO
+.BR clangd (1),
+.BR macosx-cross (1),
+.BR macosx-cross-clang (1),
+.BR macosx-cross-clang++ (1)
+.SH AUTHOR
+MrR736 <MrR736@users.github.com>
+.SH COPYRIGHT
+Copyright \(co 2026 MrR736.
+.br
+Licensed under the GNU General Public License, version 3 or later.

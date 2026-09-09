@@ -1,0 +1,485 @@
+.TH MACOSX-CROSS-LLD 1 "September 2026" "macosx-cross @MACOSX_CROSS_VERSION@" "User Commands"
+.SH NAME
+macosx-cross-lld \- invoke ld64.lld for Apple cross-linking
+.SH SYNOPSIS
+.B macosx-cross-lld
+.RB [ \-\-macosx-sdk =VERSION ]
+.RB [ \-\-target =TARGET ]
+.RB [ \-\-arch =ARCH ]
+.RB [ \-\-lld =PATH ]
+.RB [ \-\-help ]
+.RI [ ld64.lld-arguments ... ]
+.SH DESCRIPTION
+.B macosx-cross-lld
+is a wrapper around
+.BR ld64.lld (1)
+for linking Mach-O binaries for Apple platforms from a non-Apple host.
+
+The wrapper selects an Apple SDK, target triple, architecture, deployment
+target, library search paths, and platform information before invoking
+.B ld64.lld .
+
+All arguments not recognized as wrapper options are passed directly to
+.B ld64.lld .
+
+The wrapper automatically supplies several linker arguments when they have
+not already been specified, including the SDK system library root,
+architecture, and platform version.
+
+.SH OPTIONS
+.TP
+.BR \-\-macosx-sdk =VERSION
+Select the macOS, iOS, or related Apple SDK version.
+
+The SDK is expected at:
+
+.RS
+.nf
+@MACOSX_CROSS_LIBDIR@/MacOSX.sdk/VERSION
+.fi
+.RE
+
+For example:
+
+.RS
+.nf
+--macosx-sdk=10.9
+--macosx-sdk=14.5
+--macosx-sdk=15.5
+.fi
+.RE
+
+If this option is omitted, the default
+.B MacOSX.sdk
+directory is used.
+
+.TP
+.BR \-\-target =TARGET
+Select the Apple target triple.
+
+Examples include:
+
+.RS
+.nf
+x86_64-apple-darwin
+arm64-apple-darwin
+arm64-apple-ios
+x86_64-apple-ios
+arm64-apple-ios-macabi
+x86_64-apple-ios-macabi
+.fi
+.RE
+
+The target is required.
+
+.TP
+.BR \-\-arch =ARCH
+Explicitly select the Mach-O architecture.
+
+If omitted, the architecture is inferred from the target.
+
+Supported examples include:
+
+.RS
+.nf
+x86_64
+arm64
+arm64e
+arm
+i386
+.fi
+.RE
+
+.TP
+.BR \-\-lld =PATH
+Explicitly select the
+.B ld64.lld
+executable.
+
+For example:
+
+.RS
+.nf
+--lld=/opt/llvm/bin/ld64.lld
+.fi
+.RE
+
+If omitted, the wrapper searches for
+.B ld64.lld-19
+and
+.BR ld64.lld ,
+including standard
+.I /usr/bin
+and
+.I /bin
+locations.
+
+.TP
+.BR \-\-help ", " \-h
+Display usage information and exit.
+
+.TP
+.B \-\-
+Stop processing wrapper options.
+
+All following arguments are passed directly to
+.BR ld64.lld .
+.SH TARGET PLATFORMS
+The target determines the Apple platform used for linking.
+
+.TP
+.B macOS
+Targets matching:
+
+.RS
+.nf
+*-apple-darwin*
+.fi
+.RE
+
+use the macOS SDK and
+.B MACOSX_DEPLOYMENT_TARGET .
+
+.TP
+.B iOS
+Targets matching:
+
+.RS
+.nf
+*-apple-ios*
+.fi
+.RE
+
+use iOS SDK metadata and
+.B IPHONEOS_DEPLOYMENT_TARGET .
+
+.TP
+.B Mac Catalyst
+Targets matching:
+
+.RS
+.nf
+*-apple-ios-macabi*
+.fi
+.RE
+
+use the Catalyst platform and
+.B IPHONEOS_DEPLOYMENT_TARGET .
+.SH AUTOMATIC LINKER OPTIONS
+Unless explicitly supplied by the caller, the wrapper adds:
+
+.TP
+.BR \-syslibroot " " SDK
+Sets the SDK as the linker system library root.
+
+.TP
+.BR \-arch " " ARCH
+Selects the Mach-O architecture inferred from or specified by
+.BR \-\-arch .
+
+.TP
+.BR \-platform_version " " PLATFORM " " DEPLOYMENT " " SDK_VERSION
+Specifies the Apple platform version information required by
+.BR ld64.lld .
+
+The platform is one of:
+
+.RS
+.nf
+macos
+ios
+mac-catalyst
+.fi
+.RE
+.SH LIBRARY SEARCH PATHS
+The wrapper constructs library and framework search paths from the selected
+SDK and its metadata.
+
+Standard SDK paths include:
+
+.RS
+.nf
+<SDK>/usr/lib
+<SDK>/usr/lib/system
+<SDK>/System/Library/Frameworks
+<SDK>/System/Library/PrivateFrameworks
+<SDK>/Library/Frameworks
+<SDK>/Library/PrivateFrameworks
+.fi
+.RE
+
+SDK paths are passed to the linker using
+.BR \-L
+or
+.BR \-F ,
+depending on their type.
+
+Absolute Unix SDK paths such as
+.I /usr/lib
+and
+.I /System/Library/Frameworks
+are interpreted relative to the selected SDK where appropriate.
+.SH ENVIRONMENT
+.TP
+.B MACOSX_ROOT
+Installation root used by the configured wrapper.
+
+The installed wrapper normally uses:
+
+.RS
+.nf
+@MACOSX_CROSS_LIBDIR@
+.fi
+.RE
+
+.TP
+.B MACOSX_SDK_VERSION
+Default SDK version when
+.B --macosx-sdk
+is not supplied.
+
+.TP
+.B MACOSX_TARGET
+Default target triple when
+.B --target
+is not supplied.
+
+.TP
+.B MACOSX_DEPLOYMENT_TARGET
+Deployment target for macOS.
+
+If unset, the selected SDK version is used.
+
+.TP
+.B IPHONEOS_DEPLOYMENT_TARGET
+Deployment target for iOS and Mac Catalyst.
+
+If unset, the selected SDK version is used.
+
+.TP
+.B LIBRARY_SEARCH_PATHS
+Additional library search paths for macOS targets.
+
+Paths are added to the linker search path when they exist.
+
+.TP
+.B LIBRARY_IOS_SEARCH_PATHS
+Additional library search paths for iOS and Catalyst targets.
+
+.TP
+.B IOS_UNZIPPERED_TWIN_PREFIX_PATH
+Optional iOS twin SDK prefix.
+
+The wrapper can add its
+.I usr/lib
+and
+.I System/Library/Frameworks
+directories to the linker search paths.
+
+.TP
+.B SYSTEM_FRAMEWORK_SEARCH_PATHS
+Additional framework search path passed to the linker using
+.BR \-F .
+.SH SDK METADATA
+The selected SDK may contain:
+
+.RS
+.nf
+<SDK>/.metadata
+.fi
+.RE
+
+This file is sourced as a shell script and may define:
+
+.RS
+.nf
+SDK_VERSION
+MACOSX_SDK_ARCHS
+MACOSX_SDK_IOS_ARCHS
+MACOSX_SDK_IOSMAC_ARCHS
+LIBRARY_SEARCH_PATHS
+LIBRARY_IOS_SEARCH_PATHS
+IOS_UNZIPPERED_TWIN_PREFIX_PATH
+.fi
+.RE
+
+The metadata is used to determine SDK information and additional search
+paths.
+.SH LD64.LLD SELECTION
+If
+.B --lld
+is not specified, the wrapper searches for
+.B ld64.lld
+in the following order:
+
+.RS
+.nf
+ld64.lld-19
+ld64.lld
+/usr/bin/ld64.lld-19
+/usr/bin/ld64.lld
+/bin/ld64.lld-19
+/bin/ld64.lld
+.fi
+.RE
+
+The first executable found is used.
+.SH ARGUMENT PASSING
+Arguments not recognized by the wrapper are preserved and passed unchanged
+to
+.BR ld64.lld .
+
+For example:
+
+.RS
+.nf
+macosx-cross-lld \\
+    --macosx-sdk=14.5 \\
+    --target=arm64-apple-darwin \\
+    main.o -lSystem -o test
+.fi
+.RE
+
+is equivalent to invoking
+.B ld64.lld
+with the wrapper-generated SDK, architecture, platform, and search-path
+arguments in addition to:
+
+.RS
+.nf
+main.o -lSystem -o test
+.fi
+.RE
+.SH EXAMPLES
+Link an x86_64 macOS executable:
+
+.RS
+.nf
+macosx-cross-lld \\
+    --macosx-sdk=10.9 \\
+    --target=x86_64-apple-darwin \\
+    main.o -o test
+.fi
+.RE
+
+Link an arm64 macOS executable:
+
+.RS
+.nf
+macosx-cross-lld \\
+    --macosx-sdk=14.5 \\
+    --target=arm64-apple-darwin \\
+    main.o -lSystem -o test
+.fi
+.RE
+
+Link an arm64 iOS executable:
+
+.RS
+.nf
+macosx-cross-lld \\
+    --macosx-sdk=14.5 \\
+    --target=arm64-apple-ios \\
+    main.o -o test
+.fi
+.RE
+
+Link an arm64 Mac Catalyst executable:
+
+.RS
+.nf
+macosx-cross-lld \\
+    --macosx-sdk=14.5 \\
+    --target=arm64-apple-ios-macabi \\
+    main.o -o test
+.fi
+.RE
+
+Explicitly select the architecture:
+
+.RS
+.nf
+macosx-cross-lld \\
+    --macosx-sdk=14.5 \\
+    --target=arm64-apple-darwin \\
+    --arch=arm64 \\
+    main.o -o test
+.fi
+.RE
+
+Use a specific linker:
+
+.RS
+.nf
+macosx-cross-lld \\
+    --lld=/opt/llvm/bin/ld64.lld \\
+    --macosx-sdk=15.5 \\
+    --target=arm64-apple-darwin \\
+    main.o -o test
+.fi
+.RE
+
+Pass additional linker options:
+
+.RS
+.nf
+macosx-cross-lld \\
+    --macosx-sdk=14.5 \\
+    --target=arm64-apple-darwin \\
+    main.o \\
+    -dead_strip \\
+    -framework Foundation \\
+    -o test
+.fi
+.RE
+.SH FILES
+.TP
+.I @MACOSX_CROSS_LIBDIR@
+macosx-cross installation root.
+
+.TP
+.I @MACOSX_CROSS_LIBDIR@/MacOSX.sdk
+Apple SDK root.
+
+.TP
+.I @MACOSX_CROSS_LIBDIR@/MacOSX.sdk/VERSION
+Selected SDK.
+
+.TP
+.I @MACOSX_CROSS_LIBDIR@/MacOSX.sdk/VERSION/.metadata
+SDK metadata.
+.SH EXIT STATUS
+.TP
+.B 0
+The linker completed successfully.
+
+.TP
+.B 1
+The wrapper detected an error, such as a missing target, SDK, architecture,
+metadata-related configuration, or
+.BR ld64.lld .
+
+If
+.B ld64.lld
+itself fails, its exit status is propagated by the shell
+.BR exec .
+.SH NOTES
+.B macosx-cross-lld
+does not itself perform the final link. It configures the environment and
+arguments and then replaces itself with
+.BR ld64.lld .
+
+This allows linker diagnostics and the linker exit status to be returned
+directly to the caller.
+.SH SEE ALSO
+.BR ld64.lld (1),
+.BR macosx-cross (1),
+.BR macosx-cross-clang (1),
+.BR macosx-cross-clang++ (1),
+.BR macosx-cross-ldd (1)
+.SH AUTHOR
+MrR736 <MrR736@users.github.com>
+.SH COPYRIGHT
+Copyright \(co 2026 MrR736.
+.br
+Licensed under the GNU General Public License, version 3 or later.

@@ -1,0 +1,811 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+MACOSX_ROOT="@MACOSX_CROSS_LIBDIR@"
+OSX_SDK="${MACOSX_ROOT}/MacOSX.sdk"
+
+LLVM_OTOOL=""
+
+MACOSX_SDK_VERSION="${MACOSX_SDK_VERSION:-}"
+MACOSX_TARGET="${MACOSX_TARGET:-}"
+MACOSX_FILE=""
+MACOSX_ARCH=""
+
+RECURSIVE=0
+EXECUTABLE_FILE=""
+EXECUTABLE_DIR=""
+declare -A VISITED=()
+declare -A PRINTED_EDGES=()
+declare -a SEARCH_PATHS=()
+
+usage() {
+	cat <<EOF
+Usage:
+  macosx-cross-ldd [options] <mach-o-file>
+
+Options:
+  --macosx-sdk=VERSION
+      Select SDK version.
+
+  --target=TARGET
+      Target triple.
+
+      Examples:
+        x86_64-apple-darwin
+        arm64-apple-darwin
+        x86_64-apple-ios
+        arm64-apple-ios
+        arm64-apple-ios-macabi
+
+  --arch=ARCH
+      Mach-O architecture.
+
+      Examples:
+        x86_64
+        arm64
+        arm64e
+
+  --recursive
+      Recursively resolve dependencies.
+
+  --help
+      Show this help.
+
+Environment:
+  LLVM_OTOOL
+      Path to llvm-otool.
+      Default: ${LLVM_OTOOL}
+
+Examples:
+  macosx-cross-ldd \\
+      --macosx-sdk=10.9 \\
+      --target=x86_64-apple-darwin \\
+      ./test
+
+  macosx-cross-ldd \\
+      --macosx-sdk=14.5 \\
+      --target=arm64-apple-darwin \\
+      --recursive \\
+      ./test
+EOF
+}
+
+DIE() {
+	echo "macosx-cross-ldd: error: $*" >&2
+	exit 1
+}
+
+FIND_OTOOL() {
+	local CANDIDATE
+
+	if [[ -n "$LLVM_OTOOL" ]]; then
+		[[ -x "$LLVM_OTOOL" ]] || DIE "llvm-otool not executable: $LLVM_OTOOL"
+		return
+	fi
+
+	#
+	# Prefer versioned LLVM binaries because your host has LLVM 19.
+	#
+	for CANDIDATE in \
+		llvm-otool-19 \
+		llvm-otool \
+		/usr/bin/llvm-otool-19 \
+		/usr/bin/llvm-otool \
+		/bin/llvm-otool-19 \
+		/bin/llvm-otool
+	do
+		if [[ "$CANDIDATE" == */* ]]; then
+			if [[ -x "$CANDIDATE" ]]; then
+				LLVM_OTOOL="$CANDIDATE"
+				return
+			fi
+		else
+			if command -v "$CANDIDATE" >/dev/null 2>&1; then
+				LLVM_OTOOL="$(command -v "$CANDIDATE")"
+				return
+			fi
+		fi
+	done
+
+	DIE "llvm-otool not found"
+}
+
+ARRAY_CONTAINS() {
+	local ITEM="$1"
+	shift
+
+	local VALUE
+
+	for VALUE in "$@"; do
+		if [[ "$VALUE" == "$ITEM" ]]; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+
+ADD_UNIQUE() {
+	local ITEM="$1"
+	local ARRAY_NAME="$2"
+
+	local -n ARRAY_REF="$ARRAY_NAME"
+
+	if ! ARRAY_CONTAINS "$ITEM" "${ARRAY_REF[@]}"; then
+		ARRAY_REF+=("$ITEM")
+	fi
+}
+
+IS_MACHO() {
+	local FILE="$1"
+	local MAGIC
+
+	[[ -f "$FILE" ]] || return 1
+
+	MAGIC="$(
+		od -An -tx1 -N4 "$FILE" 2>/dev/null |
+		tr -d '[:space:]'
+	)"
+
+	case "$MAGIC" in
+		feedface)
+			return 0
+			;;
+
+		cefaedfe)
+			return 0
+			;;
+
+		feedfacf)
+			return 0
+			;;
+
+		cffaedfe)
+			return 0
+			;;
+
+		cafebabe)
+			return 0
+			;;
+
+		bebafeca)
+			return 0
+			;;
+
+		cafebabf)
+			return 0
+			;;
+
+		bfbafeca)
+			return 0
+			;;
+
+		*)
+			return 1
+			;;
+	esac
+}
+
+CANONICAL_PATH() {
+	local FILE="$1"
+
+	if [[ -e "$FILE" ]]; then
+		readlink -f "$FILE"
+	else
+		printf '%s\n' "$FILE"
+	fi
+}
+
+OTOOL() {
+	local MODE="$1"
+	local FILE="$2"
+
+	if [[ ! -x "$LLVM_OTOOL" ]]; then
+		echo "llvm-otool not found: $LLVM_OTOOL" >&2
+		return 1
+	fi
+
+	if [[ -n "$MACOSX_ARCH" ]]; then
+		"$LLVM_OTOOL" -arch "$MACOSX_ARCH" "$MODE" "$FILE"
+	else
+		"$LLVM_OTOOL" "$MODE" "$FILE"
+	fi
+}
+
+GET_RPATHS() {
+	local FILE="$1"
+
+	OTOOL -l "$FILE" 2>/dev/null |
+		awk '
+			$1 == "cmd" && $2 == "LC_RPATH" {
+				in_rpath = 1
+				next
+			}
+
+			in_rpath && $1 == "path" {
+				print $2
+				in_rpath = 0
+				next
+			}
+
+			in_rpath && $1 == "cmd" {
+				in_rpath = 0
+			}
+		'
+}
+
+GET_DEPENDENCIES() {
+	local FILE="$1"
+
+	OTOOL -L "$FILE" 2>/dev/null |
+		awk '
+			NR > 1 {
+				gsub(/^[[:space:]]+/, "")
+				sub(/[[:space:]]+\(.*/, "")
+
+				if ($0 != "")
+					print
+			}
+		'
+}
+
+EXPAND_PATH() {
+	local PATH_NAME="$1"
+
+	PATH_NAME="${PATH_NAME//\$\{SDKROOT\}/$OSX_SDK}"
+	PATH_NAME="${PATH_NAME//\$(SDKROOT)/$OSX_SDK}"
+
+	PATH_NAME="${PATH_NAME//\$\{SDK_DIR\}/$OSX_SDK}"
+	PATH_NAME="${PATH_NAME//\$(SDK_DIR)/$OSX_SDK}"
+
+	PATH_NAME="${PATH_NAME//\$\{MACOSX_SDK\}/$OSX_SDK}"
+	PATH_NAME="${PATH_NAME//\$(MACOSX_SDK)/$OSX_SDK}"
+
+	printf '%s\n' "$PATH_NAME"
+}
+
+CHECK_CANDIDATE() {
+	local CANDIDATE="$1"
+
+	[[ -f "$CANDIDATE" ]] || return 1
+
+	CANONICAL_PATH "$CANDIDATE"
+}
+
+RESOLVE_LOADER_PATH() {
+	local DEPENDENCY="$1"
+	local LOADER="$2"
+
+	local LOADER_DIR
+	local CANDIDATE
+
+	LOADER_DIR="$(dirname "$LOADER")"
+
+	CANDIDATE="${DEPENDENCY//@loader_path/$LOADER_DIR}"
+
+	if CHECK_CANDIDATE "$CANDIDATE"; then
+		return 0
+	fi
+
+	return 1
+}
+
+RESOLVE_EXECUTABLE_PATH() {
+	local DEPENDENCY="$1"
+
+	local CANDIDATE
+
+	CANDIDATE="${DEPENDENCY//@executable_path/$EXECUTABLE_DIR}"
+
+	if CHECK_CANDIDATE "$CANDIDATE"; then
+		return 0
+	fi
+
+	return 1
+}
+
+RESOLVE_RPATH() {
+	local DEPENDENCY="$1"
+	local LOADER="$2"
+
+	local RPATH
+	local CANDIDATE
+	local LOADER_DIR
+
+	LOADER_DIR="$(dirname "$LOADER")"
+
+	local -a RPATHS=()
+
+	while IFS= read -r RPATH; do
+		[[ -n "$RPATH" ]] || continue
+		RPATHS+=("$RPATH")
+	done < <(GET_RPATHS "$LOADER")
+
+	if [[ -n "$EXECUTABLE_FILE" ]] &&
+	   [[ "$EXECUTABLE_FILE" != "$LOADER" ]]; then
+
+		while IFS= read -r RPATH; do
+			[[ -n "$RPATH" ]] || continue
+			RPATHS+=("$RPATH")
+		done < <(GET_RPATHS "$EXECUTABLE_FILE")
+	fi
+
+	for RPATH in "${RPATHS[@]}"; do
+
+		RPATH="${RPATH//@loader_path/$LOADER_DIR}"
+		RPATH="${RPATH//@executable_path/$EXECUTABLE_DIR}"
+
+		RPATH="$(EXPAND_PATH "$RPATH")"
+
+		CANDIDATE="${DEPENDENCY/@rpath/$RPATH}"
+
+		if CHECK_CANDIDATE "$CANDIDATE"; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+RESOLVE_FRAMEWORK() {
+	local DEPENDENCY="$1"
+
+	local FRAMEWORK_PATH
+	local FRAMEWORK_NAME
+	local FRAMEWORK_DIR
+	local CANDIDATE
+
+	if [[ "$DEPENDENCY" != *.framework/* ]]; then
+		return 1
+	fi
+
+	FRAMEWORK_PATH="${DEPENDENCY%%.framework/*}.framework"
+	FRAMEWORK_NAME="${DEPENDENCY##*.framework/}"
+
+	FRAMEWORK_DIR="$(basename "$FRAMEWORK_PATH")"
+	FRAMEWORK_DIR="${FRAMEWORK_DIR%.framework}"
+
+	if [[ "$FRAMEWORK_PATH" == /* ]]; then
+
+		CANDIDATE="${OSX_SDK}${FRAMEWORK_PATH}/${FRAMEWORK_NAME}"
+
+		if CHECK_CANDIDATE "$CANDIDATE"; then
+			return 0
+		fi
+
+		CANDIDATE="${OSX_SDK}${FRAMEWORK_PATH}/Versions/Current/${FRAMEWORK_NAME}"
+
+		if CHECK_CANDIDATE "$CANDIDATE"; then
+			return 0
+		fi
+
+		CANDIDATE="${OSX_SDK}${FRAMEWORK_PATH}/Versions/A/${FRAMEWORK_NAME}"
+
+		if CHECK_CANDIDATE "$CANDIDATE"; then
+			return 0
+		fi
+	fi
+
+	local FRAMEWORK_ROOT
+
+	for FRAMEWORK_ROOT in \
+		"${OSX_SDK}/System/Library/Frameworks" \
+		"${OSX_SDK}/Library/Frameworks" \
+		"${OSX_SDK}/System/Library/PrivateFrameworks" \
+		"${OSX_SDK}/Library/PrivateFrameworks"
+	do
+
+		CANDIDATE="${FRAMEWORK_ROOT}/${FRAMEWORK_DIR}/${FRAMEWORK_NAME}"
+
+		if CHECK_CANDIDATE "$CANDIDATE"; then
+			return 0
+		fi
+
+		CANDIDATE="${FRAMEWORK_ROOT}/${FRAMEWORK_DIR}/Versions/Current/${FRAMEWORK_NAME}"
+
+		if CHECK_CANDIDATE "$CANDIDATE"; then
+			return 0
+		fi
+
+		CANDIDATE="${FRAMEWORK_ROOT}/${FRAMEWORK_DIR}/Versions/A/${FRAMEWORK_NAME}"
+
+		if CHECK_CANDIDATE "$CANDIDATE"; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+RESOLVE_SEARCH_PATH() {
+	local DEPENDENCY="$1"
+
+	local SEARCH_PATH
+	local CANDIDATE
+	local BASENAME
+
+	BASENAME="$(basename "$DEPENDENCY")"
+
+	for SEARCH_PATH in "${SEARCH_PATHS[@]}"; do
+
+		[[ -n "$SEARCH_PATH" ]] || continue
+
+		SEARCH_PATH="$(EXPAND_PATH "$SEARCH_PATH")"
+
+		if [[ "$SEARCH_PATH" == *'$('* ]] ||
+		   [[ "$SEARCH_PATH" == *'${'* ]]; then
+			continue
+		fi
+
+		CANDIDATE="${SEARCH_PATH}/${DEPENDENCY}"
+
+		if CHECK_CANDIDATE "$CANDIDATE"; then
+			return 0
+		fi
+
+		CANDIDATE="${SEARCH_PATH}/${BASENAME}"
+
+		if CHECK_CANDIDATE "$CANDIDATE"; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+RESOLVE_DEPENDENCY() {
+	local DEPENDENCY="$1"
+	local LOADER="$2"
+
+	local CANDIDATE
+	local SDK_DEPENDENCY
+
+	if [[ "$DEPENDENCY" == @loader_path/* ]]; then
+		if RESOLVE_LOADER_PATH "$DEPENDENCY" "$LOADER"; then
+			return 0
+		fi
+
+		return 1
+	fi
+
+	if [[ "$DEPENDENCY" == @executable_path/* ]]; then
+		if RESOLVE_EXECUTABLE_PATH "$DEPENDENCY"; then
+			return 0
+		fi
+
+		return 1
+	fi
+
+	if [[ "$DEPENDENCY" == @rpath/* ]]; then
+		if RESOLVE_RPATH "$DEPENDENCY" "$LOADER"; then
+			return 0
+		fi
+
+		return 1
+	fi
+
+	if [[ "$DEPENDENCY" == *.framework/* ]]; then
+		if RESOLVE_FRAMEWORK "$DEPENDENCY"; then
+			return 0
+		fi
+	fi
+
+	if [[ "$DEPENDENCY" == /* ]]; then
+
+		SDK_DEPENDENCY="${OSX_SDK}${DEPENDENCY}"
+
+		if CHECK_CANDIDATE "$SDK_DEPENDENCY"; then
+			return 0
+		fi
+
+		if [[ -n "${IOS_UNZIPPERED_TWIN_PREFIX_PATH:-}" ]]; then
+
+			CANDIDATE="${IOS_UNZIPPERED_TWIN_PREFIX_PATH}${DEPENDENCY}"
+
+			if CHECK_CANDIDATE "$CANDIDATE"; then
+				return 0
+			fi
+		fi
+
+		return 1
+	fi
+
+	if RESOLVE_SEARCH_PATH "$DEPENDENCY"; then
+		return 0
+	fi
+
+	local BASENAME
+
+	BASENAME="$(basename "$DEPENDENCY")"
+
+	for CANDIDATE in \
+		"${OSX_SDK}/usr/lib/${BASENAME}" \
+		"${OSX_SDK}/usr/lib/system/${BASENAME}" \
+		"${OSX_SDK}/System/Library/${BASENAME}" \
+		"${OSX_SDK}/System/Library/Frameworks/${BASENAME}" \
+		"${OSX_SDK}/usr/local/lib/${BASENAME}"
+	do
+		if CHECK_CANDIDATE "$CANDIDATE"; then
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+LOAD_METADATA() {
+	local METADATA="${OSX_SDK}/.metadata"
+
+	if [[ ! -f "$METADATA" ]]; then
+		echo "warning: SDK metadata not found: $METADATA" >&2
+		return 0
+	fi
+
+	source "$METADATA"
+}
+
+
+BUILD_SEARCH_PATHS() {
+	local PATH_NAME
+
+	SEARCH_PATHS=()
+
+	ADD_UNIQUE "${OSX_SDK}/usr/lib" SEARCH_PATHS
+	ADD_UNIQUE "${OSX_SDK}/usr/lib/system" SEARCH_PATHS
+	ADD_UNIQUE "${OSX_SDK}/System/Library/Frameworks" SEARCH_PATHS
+	ADD_UNIQUE "${OSX_SDK}/System/Library/PrivateFrameworks" SEARCH_PATHS
+	ADD_UNIQUE "${OSX_SDK}/Library/Frameworks" SEARCH_PATHS
+	ADD_UNIQUE "${OSX_SDK}/Library/PrivateFrameworks" SEARCH_PATHS
+
+	local -a METADATA_PATHS=()
+
+	if [[ "$MACOSX_TARGET" == *-apple-ios* ]]; then
+
+		if [[ -n "${LIBRARY_IOS_SEARCH_PATHS:-}" ]]; then
+			read -r -a METADATA_PATHS <<< "$LIBRARY_IOS_SEARCH_PATHS"
+
+			for PATH_NAME in "${METADATA_PATHS[@]}"; do
+				ADD_UNIQUE "$PATH_NAME" SEARCH_PATHS
+			done
+		fi
+
+	else
+
+		if [[ -n "${LIBRARY_SEARCH_PATHS:-}" ]]; then
+			read -r -a METADATA_PATHS <<< "$LIBRARY_SEARCH_PATHS"
+
+			for PATH_NAME in "${METADATA_PATHS[@]}"; do
+				ADD_UNIQUE "$PATH_NAME" SEARCH_PATHS
+			done
+		fi
+	fi
+
+	if [[ -n "${IOS_UNZIPPERED_TWIN_PREFIX_PATH:-}" ]]; then
+
+		ADD_UNIQUE \
+			"${IOS_UNZIPPERED_TWIN_PREFIX_PATH}/usr/lib" \
+			SEARCH_PATHS
+
+		ADD_UNIQUE \
+			"${IOS_UNZIPPERED_TWIN_PREFIX_PATH}/System/Library/Frameworks" \
+			SEARCH_PATHS
+	fi
+}
+
+PRINT_DEPENDENCIES() {
+	local FILE="$1"
+	local PREFIX="$2"
+
+	local DEPENDENCY
+	local RESOLVED
+	local KEY
+	local EDGE_KEY
+
+	FILE="$(CANONICAL_PATH "$FILE")"
+
+	if [[ -n "${VISITED["$FILE"]+x}" ]]; then
+		return 0
+	fi
+
+	VISITED["$FILE"]=1
+
+	while IFS= read -r DEPENDENCY; do
+
+		[[ -n "$DEPENDENCY" ]] || continue
+
+		if RESOLVED="$(RESOLVE_DEPENDENCY "$DEPENDENCY" "$FILE")"; then
+
+			RESOLVED="$(CANONICAL_PATH "$RESOLVED")"
+
+			EDGE_KEY="${FILE}"$'\x1f'"${DEPENDENCY}"$'\x1f'"${RESOLVED}"
+
+			if [[ -n "${PRINTED_EDGES["$EDGE_KEY"]+x}" ]]; then
+				continue
+			fi
+
+			PRINTED_EDGES["$EDGE_KEY"]=1
+
+			printf '%s%s => %s\n' \
+				"$PREFIX" \
+				"$DEPENDENCY" \
+				"$RESOLVED"
+
+			if (( RECURSIVE )); then
+				KEY="$RESOLVED"
+				if [[ -z "${VISITED["$KEY"]+x}" ]]; then
+					PRINT_DEPENDENCIES \
+						"$RESOLVED" \
+						"${PREFIX}	"
+				fi
+			fi
+
+		else
+
+			EDGE_KEY="${FILE}"$'\x1f'"${DEPENDENCY}"$'\x1f'"<not-found>"
+
+			if [[ -n "${PRINTED_EDGES["$EDGE_KEY"]+x}" ]]; then
+				continue
+			fi
+
+			PRINTED_EDGES["$EDGE_KEY"]=1
+			printf '%s%s => not found\n' \
+				"$PREFIX" \
+				"$DEPENDENCY"
+		fi
+	done < <(GET_DEPENDENCIES "$FILE")
+}
+
+while [[ $# -gt 0 ]]; do
+	case "$1" in
+		--macosx-sdk=*)
+			MACOSX_SDK_VERSION="${1#*=}"
+			shift
+			;;
+		--target=*)
+			MACOSX_TARGET="${1#*=}"
+			shift
+			;;
+		--arch=*)
+			MACOSX_ARCH="${1#*=}"
+			shift
+			;;
+		--recursive)
+			RECURSIVE=1
+			shift
+			;;
+		--help|-h)
+			usage
+			exit 0
+			;;
+		--)
+			shift
+			if [[ $# -gt 0 ]]; then
+				MACOSX_FILE="$1"
+				shift
+			fi
+			;;
+
+		-*)
+			echo "error: unknown option: $1" >&2
+			usage >&2
+			exit 1
+			;;
+
+		*)
+			if [[ -n "$MACOSX_FILE" ]]; then
+				DIE "error: multiple input files"
+			fi
+			MACOSX_FILE="$1"
+			shift
+			;;
+	esac
+done
+
+if [[ -z "$MACOSX_FILE" ]]; then
+	echo "error: no input file" >&2
+	usage >&2
+	exit 1
+fi
+
+if [[ ! -f "$MACOSX_FILE" ]]; then
+	DIE "file not found: $MACOSX_FILE"
+fi
+
+MACOSX_FILE="$(CANONICAL_PATH "$MACOSX_FILE")"
+
+FIND_OTOOL
+
+if [[ ! -x "$LLVM_OTOOL" ]]; then
+	echo "error: llvm-otool not found: $LLVM_OTOOL" >&2
+	echo "	Set LLVM_OTOOL=/path/to/llvm-otool-19" >&2
+	exit 1
+fi
+
+if [[ ! -x "$MACOSX_ROOT/scripts/macosx_tools.sh" ]]; then
+	:
+fi
+
+if [[ -z "$MACOSX_SDK_VERSION" ]]; then
+	MACOSX_SDK_VERSION="default"
+fi
+
+if [[ "$MACOSX_SDK_VERSION" == "default" ]]; then
+	if [[ -d "$OSX_SDK" ]]; then
+		:
+	else
+		DIE "SDK root not found: $OSX_SDK"
+	fi
+else
+	OSX_SDK="${MACOSX_ROOT}/MacOSX.sdk/${MACOSX_SDK_VERSION}"
+	if [[ ! -d "$OSX_SDK" ]]; then
+		DIE "SDK not found: $OSX_SDK"
+	fi
+fi
+
+if [[ -z "$MACOSX_TARGET" ]]; then
+	DIE "--target is required"
+fi
+
+LOAD_METADATA
+if [[ -z "$MACOSX_ARCH" ]]; then
+	case "$MACOSX_TARGET" in
+		x86_64-apple-darwin*)
+			MACOSX_ARCH="x86_64"
+			;;
+		arm64-apple-darwin*)
+			MACOSX_ARCH="arm64"
+			;;
+		arm64e-apple-darwin*)
+			MACOSX_ARCH="arm64e"
+			;;
+		x86_64-apple-ios*)
+			MACOSX_ARCH="x86_64"
+			;;
+		arm64-apple-ios*)
+			MACOSX_ARCH="arm64"
+			;;
+		*)
+			MACOSX_ARCH="${MACOSX_TARGET%%-*}"
+			;;
+	esac
+fi
+
+case "$MACOSX_TARGET" in
+	*-apple-darwin)
+		if [[ -n "${MACOSX_SDK_ARCHS:-}" ]]; then
+			if ! ARRAY_CONTAINS "$MACOSX_ARCH" ${MACOSX_SDK_ARCHS}; then
+				DIE "architecture '$MACOSX_ARCH' is not supported by SDK"
+			fi
+		fi
+		;;
+	*-apple-ios)
+		if [[ -n "${MACOSX_SDK_IOS_ARCHS:-}" ]]; then
+			if ! ARRAY_CONTAINS "$MACOSX_ARCH" ${MACOSX_SDK_IOS_ARCHS}; then
+				DIE "architecture '$MACOSX_ARCH' is not supported by iOS SDK"
+			fi
+		fi
+		;;
+	*-apple-ios-macabi)
+		if [[ -n "${MACOSX_SDK_IOSMAC_ARCHS:-}" ]]; then
+			if ! ARRAY_CONTAINS "$MACOSX_ARCH" ${MACOSX_SDK_IOSMAC_ARCHS}; then
+				DIE "architecture '$MACOSX_ARCH' is not supported by Catalyst SDK"
+			fi
+		fi
+		;;
+esac
+
+BUILD_SEARCH_PATHS
+
+EXECUTABLE_FILE="$MACOSX_FILE"
+EXECUTABLE_DIR="$(dirname "$EXECUTABLE_FILE")"
+
+if ! IS_MACHO "$MACOSX_FILE"; then
+	echo "$MACOSX_FILE:"
+	DIE "	not a Mach-O file"
+fi
+
+printf '%s:\n' "$MACOSX_FILE"
+
+PRINT_DEPENDENCIES "$MACOSX_FILE" "	"

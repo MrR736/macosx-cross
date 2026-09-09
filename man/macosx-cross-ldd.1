@@ -1,0 +1,416 @@
+.TH MACOSX-CROSS-LDD 1 "September 2026" "macosx-cross @MACOSX_CROSS_VERSION@" "User Commands"
+.SH NAME
+macosx-cross-ldd \- inspect Mach-O dynamic library dependencies
+.SH SYNOPSIS
+.B macosx-cross-ldd
+.RB [ \-\-macosx-sdk =VERSION ]
+.RB [ \-\-target =TARGET ]
+.RB [ \-\-arch =ARCH ]
+.RB [ \-\-recursive ]
+.RB [ \-\-help ]
+.I mach-o-file
+.SH DESCRIPTION
+.B macosx-cross-ldd
+inspects the dynamic library dependencies of a Mach-O executable or library
+using
+.B llvm-otool .
+
+Dependencies are read from the Mach-O load commands using
+.B "llvm-otool -L"
+and resolved against the selected macOS SDK, framework directories,
+metadata-defined library search paths, and Mach-O runtime path mechanisms.
+
+The program supports
+.B @loader_path ,
+.B @executable_path ,
+and
+.B @rpath
+dependency references.
+
+Framework dependencies are resolved against the framework directories
+provided by the selected SDK.
+
+By default, only the direct dependencies of the input file are displayed.
+Use
+.B --recursive
+to recursively inspect the dependencies of resolved libraries.
+.SH OPTIONS
+.TP
+.BR \-\-macosx-sdk =VERSION
+Select the macOS SDK version to use.
+
+The SDK must exist below the macosx-cross SDK directory.
+
+For example:
+
+.RS
+.nf
+--macosx-sdk=10.9
+--macosx-sdk=14.5
+--macosx-sdk=15.5
+.fi
+.RE
+
+If omitted, the default SDK root is used.
+
+.TP
+.BR \-\-target =TARGET
+Select the target triple.
+
+Supported target families include:
+
+.RS
+.nf
+x86_64-apple-darwin
+arm64-apple-darwin
+arm64e-apple-darwin
+
+x86_64-apple-ios
+arm64-apple-ios
+
+arm64-apple-ios-macabi
+.fi
+.RE
+
+The target is required.
+
+The target is also used to select architecture defaults and the appropriate
+SDK metadata search paths.
+
+.TP
+.BR \-\-arch =ARCH
+Select the Mach-O architecture passed to
+.B llvm-otool .
+
+Supported examples include:
+
+.RS
+.nf
+x86_64
+arm64
+arm64e
+.fi
+.RE
+
+If omitted, the architecture is inferred from the target.
+
+.TP
+.B \-\-recursive
+Recursively resolve dependencies.
+
+Without this option, only the dependencies directly referenced by the input
+file are displayed.
+
+.TP
+.BR \-\-help ", " \-h
+Display usage information and exit.
+.TP
+.B \-\-
+End option processing and treat the following argument as the input file.
+.SH OUTPUT
+The input file is printed first, followed by each dependency and its
+resolved path.
+
+A successfully resolved dependency is displayed as:
+
+.RS
+.nf
+        DEPENDENCY => /resolved/path
+.fi
+.RE
+
+When a dependency cannot be resolved:
+
+.RS
+.nf
+        DEPENDENCY => not found
+.fi
+.RE
+
+Recursive dependencies are indented with an additional tab for each level.
+.SH DEPENDENCY RESOLUTION
+Dependencies are resolved using the following mechanisms.
+
+.TP
+.B @loader_path
+The directory containing the Mach-O file currently being inspected is used
+as
+.B @loader_path .
+
+.TP
+.B @executable_path
+The directory containing the original executable is used as
+.B @executable_path .
+
+.TP
+.B @rpath
+RPATH entries from the Mach-O loader are expanded and searched.
+
+RPATH entries from the original executable are also considered when
+inspecting a dependency.
+
+.TP
+.B Frameworks
+Framework dependencies are resolved against framework directories in the
+selected SDK, including:
+
+.RS
+.nf
+System/Library/Frameworks
+Library/Frameworks
+System/Library/PrivateFrameworks
+Library/PrivateFrameworks
+.fi
+.RE
+
+Versioned framework layouts using
+.B Versions/Current
+and
+.B Versions/A
+are supported.
+
+.TP
+.B Absolute paths
+Absolute dependency paths are first interpreted relative to the selected
+SDK.
+
+For example:
+
+.RS
+.nf
+/usr/lib/libSystem.B.dylib
+.fi
+.RE
+
+is searched as:
+
+.RS
+.nf
+<SDK>/usr/lib/libSystem.B.dylib
+.fi
+.RE
+
+.TP
+.B Search paths
+Metadata-defined library search paths are used in addition to the standard
+SDK library and framework directories.
+
+For iOS targets,
+.B LIBRARY_IOS_SEARCH_PATHS
+is used.
+
+For macOS targets,
+.B LIBRARY_SEARCH_PATHS
+is used.
+.SH ENVIRONMENT
+.TP
+.B LLVM_OTOOL
+Path to the
+.B llvm-otool
+executable.
+
+If unset, the program searches for:
+
+.RS
+.nf
+llvm-otool-19
+llvm-otool
+/usr/bin/llvm-otool-19
+/usr/bin/llvm-otool
+/bin/llvm-otool-19
+/bin/llvm-otool
+.fi
+.RE
+
+The first executable found is used.
+
+.TP
+.B MACOSX_SDK_VERSION
+Default SDK version when
+.B --macosx-sdk
+is not specified.
+
+.TP
+.B MACOSX_TARGET
+Default target triple when
+.B --target
+is not specified.
+
+.TP
+.B MACOSX_SDK_ARCHS
+Architecture list for macOS SDK targets.
+
+.TP
+.B MACOSX_SDK_IOS_ARCHS
+Architecture list for iOS targets.
+
+.TP
+.B MACOSX_SDK_IOSMAC_ARCHS
+Architecture list for iOS Mac Catalyst targets.
+
+.TP
+.B LIBRARY_SEARCH_PATHS
+Additional library search paths for macOS targets.
+
+.TP
+.B LIBRARY_IOS_SEARCH_PATHS
+Additional library search paths for iOS targets.
+
+.TP
+.B IOS_UNZIPPERED_TWIN_PREFIX_PATH
+Optional prefix used when resolving absolute dependencies and additional
+iOS SDK library and framework paths.
+.SH SDK METADATA
+When an SDK is selected,
+.B macosx-cross-ldd
+loads:
+
+.RS
+.nf
+<SDK>/.metadata
+.fi
+.RE
+
+The metadata can provide architecture lists and additional library search
+paths used during dependency resolution.
+.SH MACH-O SUPPORT
+The input file must be a Mach-O file.
+
+The following Mach-O magic values are recognized:
+
+.RS
+.nf
+feedface
+cefaedfe
+feedfacf
+cffaedfe
+cafebabe
+bebafeca
+cafebabf
+bfbafeca
+.fi
+.RE
+
+Both regular Mach-O files and universal/fat Mach-O files are recognized.
+
+The selected architecture is passed to
+.B llvm-otool
+when
+.B --arch
+is specified or inferred.
+.SH FILES
+.TP
+.I @MACOSX_CROSS_LIBDIR@
+macosx-cross installation root.
+
+.TP
+.I @MACOSX_CROSS_LIBDIR@/MacOSX.sdk
+Installed SDK directory.
+
+.TP
+.I @MACOSX_CROSS_LIBDIR@/MacOSX.sdk/VERSION
+Individual macOS SDK.
+
+.TP
+.I @MACOSX_CROSS_LIBDIR@/MacOSX.sdk/VERSION/.metadata
+SDK metadata used for dependency resolution.
+.SH EXAMPLES
+Inspect an x86_64 macOS executable:
+
+.RS
+.nf
+macosx-cross-ldd \\
+    --macosx-sdk=10.9 \\
+    --target=x86_64-apple-darwin \\
+    ./test
+.fi
+.RE
+
+Inspect an arm64 macOS executable recursively:
+
+.RS
+.nf
+macosx-cross-ldd \\
+    --macosx-sdk=14.5 \\
+    --target=arm64-apple-darwin \\
+    --recursive \\
+    ./test
+.fi
+.RE
+
+Explicitly select an architecture:
+
+.RS
+.nf
+macosx-cross-ldd \\
+    --macosx-sdk=15.5 \\
+    --target=arm64-apple-darwin \\
+    --arch=arm64 \\
+    ./test
+.fi
+.RE
+
+Inspect an iOS binary:
+
+.RS
+.nf
+macosx-cross-ldd \\
+    --macosx-sdk=18.0 \\
+    --target=arm64-apple-ios \\
+    ./test
+.fi
+.RE
+
+Use a custom llvm-otool:
+
+.RS
+.nf
+LLVM_OTOOL=/opt/llvm/bin/llvm-otool \\
+macosx-cross-ldd \\
+    --macosx-sdk=14.5 \\
+    --target=arm64-apple-darwin \\
+    ./test
+.fi
+.RE
+
+Use environment variables instead of command-line options:
+
+.RS
+.nf
+MACOSX_SDK_VERSION=14.5 \\
+MACOSX_TARGET=arm64-apple-darwin \\
+macosx-cross-ldd ./test
+.fi
+.RE
+.SH EXIT STATUS
+.TP
+.B 0
+The input Mach-O file was successfully inspected.
+
+Individual dependencies may still be reported as
+.B "not found"
+while the command exits successfully.
+
+.TP
+.B 1
+An error occurred, including an invalid input file, missing SDK, missing
+target, unsupported architecture, unknown option, or unavailable
+.B llvm-otool .
+.SH NOTES
+.B macosx-cross-ldd
+is intended for inspecting cross-compiled Apple binaries on non-macOS
+hosts.
+
+It does not execute the Mach-O binary and does not use the host system's
+dynamic linker.
+.SH SEE ALSO
+.BR macosx-cross (1),
+.BR macosx-cross-clang (1),
+.BR macosx-cross-clang++ (1),
+.BR llvm-otool (1)
+.SH AUTHOR
+MrR736 <MrR736@users.github.com>
+.SH COPYRIGHT
+Copyright \(co 2026 MrR736.
+.br
+Licensed under the GNU General Public License, version 3 or later.
