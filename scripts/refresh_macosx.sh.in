@@ -12,6 +12,10 @@ fi
 
 MACOSX_SDK="${OSX_SDK}/${MACOSX_SDK_VERSION}"
 if [[ -f "${MACOSX_SDK}/.metadata" ]]; then
+	if [[ ! -w "${MACOSX_SDK}" ]]; then
+		sudo chown -R "$(id -u):$(id -g)" "${MACOSX_SDK}" ||
+			DIE "Cannot make macOS SDK writable."
+	fi
 	rm -f "${MACOSX_SDK}/.metadata"
 	GENERATE_MACOSX_SDK_METADATA "${MACOSX_SDK}"
 fi

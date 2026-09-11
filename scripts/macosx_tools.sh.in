@@ -17,21 +17,28 @@ OSX_SDK="${MACOSX_ROOT}/MacOSX.sdk"
 MACOSX_CFLAGS="@MACOSX_CFLAGS@"
 MACOSX_CXXFLAGS="@MACOSX_CXXFLAGS@"
 
-mkdir -p ${MACOSX_CACHE}
+mkdir -p "${MACOSX_CACHE}" "${OSX_SDK}"
 
-MACOSX_SILENT=0
+# The metadata cache is writable by the user running macosx-cross.
+if [[ ! -w "${MACOSX_CACHE}" ]]; then
+	sudo chown "$(id -u):$(id -g)" "${MACOSX_CACHE}" ||
+	DIE "Cannot make macOS SDK cache writable."
+fi
 
-SET_MACOSX_LOG() {
-	MACOSX_SILENT=$((1 - MACOSX_SILENT))
-}
+if [[ ! -w "${OSX_SDK}" ]]; then
+	sudo chown "$(id -u):$(id -g)" "${OSX_SDK}" ||
+	DIE "Cannot make macOS SDKs writable."
+fi
+
+MACOSX_SILENT="${MACOSX_SILENT:-0}"
 
 CHECK_MACOSX_LOG() {
-	(( MACOSX_SILENT == 0 ))
+	[[ "$MACOSX_SILENT" -eq 0 ]]
 }
 
 MACOSX_LOG() {
 	if CHECK_MACOSX_LOG; then
-		echo "$@"
+		printf '%s\n' "$@"
 	fi
 }
 
@@ -44,15 +51,16 @@ WARN() {
 	echo "macosx-cross: Warning: $*" >&2
 }
 
-if MACOSX_CHECK_INTERNET; then
+if MACOSX_CHECK_INTERNET && [[ MACOSX_TOOLS_SH_LOADED == 0 ]]; then
 	rm -f "${MACOSX_CACHE}/macosx.tags" "${MACOSX_CACHE}/macosx_sdks.json"
-	MACOSX_LOG "Downloading macOS SDK metadata..."
-	curl -fsSL https://api.github.com/repos/joseluisq/macosx-sdks/tags |
-		grep '"name":' | sed -E 's/.*"name": "([^"]+)".*/\1/' > "${MACOSX_CACHE}/macosx.tags"
-	curl -fsSL \
-		"https://raw.githubusercontent.com/joseluisq/macosx-sdks/refs/heads/master/macosx_sdks.json" > "${MACOSX_CACHE}/macosx_sdks.json"
+	curl -fsSL "https://api.github.com/repos/joseluisq/macosx-sdks/tags" | grep '"name":' |
+		sed -E 's/.*"name": "([^"]+)".*/\1/' > "${MACOSX_CACHE}/macosx.tags" ||
+		DIE "Failed to download macOS SDK tags."
+
+	curl -fsSL "https://raw.githubusercontent.com/joseluisq/macosx-sdks/refs/heads/master/macosx_sdks.json" \
+		> "${MACOSX_CACHE}/macosx_sdks.json" || DIE "Failed to download macOS SDK metadata."
 elif [[ ! -f "${MACOSX_CACHE}/macosx.tags" || ! -f "${MACOSX_CACHE}/macosx_sdks.json" ]]; then
-	DIE " macOS SDK metadata Is Missing and Internet Is OFF."
+	DIE "macOS SDK metadata is missing and Internet is OFF."
 fi
 
 MACOSX_SDK_VERSIONS=()

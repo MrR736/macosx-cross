@@ -2,14 +2,14 @@
 
 set -euo pipefail
 
-. @MACOSX_CROSS_LIBDIR@/scripts/macosx_tools.sh
-
 case "${1:-}" in
 	-s|--silent)
-		SET_MACOSX_LOG
+		export MACOSX_SILENT=1
 		shift
 		;;
 esac
+
+. @MACOSX_CROSS_LIBDIR@/scripts/macosx_tools.sh
 
 case "${1:-}" in
 	install)

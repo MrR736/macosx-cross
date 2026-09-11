@@ -25,6 +25,11 @@ mkdir -p "${MACOSX_CACHE}"
 if [[ ! -f "${MACOSX_SDK}/.metadata" ]]; then
 	mkdir -p "${MACOSX_SDK}"
 
+	if [[ ! -w "${MACOSX_SDK}" ]]; then
+		sudo chown "$(id -u):$(id -g)" "${MACOSX_SDK}" ||
+		DIE "Cannot make macOS SDK ${MACOSX_SDK_VERSION} writable."
+	fi
+
 	if [[ ! -f "${MACOSX_CACHE}/${MACOSX_SDK_FILE}" ]]; then
 		MACOSX_LOG "Downloading macOS ${MACOSX_SDK_VERSION} SDK..."
 		MACOSX_LOG "URL: ${MACOSX_SDK_URL}"
