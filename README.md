@@ -518,8 +518,7 @@ Current tools include:
 ```text
 tools/
 ├── cmake/
-├── make/
-└── mk -> make
+└── make/
 ```
 
 ### Copy a tool
@@ -541,14 +540,6 @@ For `make`:
 ```bash
 macosx-cross --tool make
 ```
-
-The `mk` tool is a symbolic link to `make`:
-
-```text
-mk -> make
-```
-
-Copying it preserves the symbolic link.
 
 ### List available tools
 
@@ -670,8 +661,7 @@ macosx-cross/
 ├── scripts/
 ├── tools/
 │   ├── cmake/
-│   ├── make/
-│   └── mk -> make
+│   └── make/
 ├── CMakeLists.txt
 ├── LICENSE
 └── README.md
@@ -704,8 +694,7 @@ Create a simple C program:
 ```c
 #include <stdio.h>
 
-int main(void)
-{
+int main(void) {
     puts("Hello from macOS cross-compilation!");
     return 0;
 }
@@ -823,10 +812,4 @@ for the complete license text.
 
 ## Author
 
-MrR736 <MrR736@users.github.com>
-
-## Source
-
-The project source repository is:
-
-https://github.com/MrR736/macosx-cross
+**MrR736** <[MrR736@users.github.com](mailto:MrR736@users.github.com)>
