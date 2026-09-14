@@ -31,6 +31,7 @@ The host system requires:
 - `tar`
 - CMake
 - `make`
+- `python3`
 
 Depending on the operation, root privileges may be required to install or remove SDKs and system-wide files.
 
