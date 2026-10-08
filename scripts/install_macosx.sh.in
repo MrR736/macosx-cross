@@ -13,7 +13,14 @@ fi
 MACOSX_SDK_URL="$(
 	printf '%s' "$MACOSX_SDKS_JSON" |
 		jq -er --arg version "$MACOSX_SDK_VERSION" \
-			'.[] | select(.version == ("macOS " + $version) or .version == ("OS X " + $version)) | .github_download_url'
+			'.[] |
+			select(
+				.version == ("macOS " + $version) or
+				.version == ("OS X " + $version) or
+				.version == ("Mac OS " + $version) or
+				.version == ("Mac OS X " + $version)
+			) |
+			.github_download_url'
 )"
 
 MACOSX_SDK_FILE="$(basename "$MACOSX_SDK_URL")"
@@ -30,9 +37,9 @@ if [[ ! -f "${MACOSX_SDK}/.metadata" ]]; then
 		DIE "Cannot make macOS SDK ${MACOSX_SDK_VERSION} writable."
 	fi
 
+	MACOSX_LOG "URL: ${MACOSX_SDK_URL}"
 	if [[ ! -f "${MACOSX_CACHE}/${MACOSX_SDK_FILE}" ]]; then
 		MACOSX_LOG "Downloading macOS ${MACOSX_SDK_VERSION} SDK..."
-		MACOSX_LOG "URL: ${MACOSX_SDK_URL}"
 		if CHECK_MACOSX_LOG; then
 			curl -fL  --progress-bar \
 				-o "${MACOSX_CACHE}/${MACOSX_SDK_FILE}" \

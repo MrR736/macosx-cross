@@ -1,4 +1,4 @@
-.TH MACOSX-CROSS-CLANG 1 "September 2026" "macosx-cross @MACOSX_CROSS_VERSION@" "macosx-cross"
+.TH macosx-cross-@MACOSX_CROSS_CLANG@ 1 "September 2026" "macosx-cross @MACOSX_CROSS_VERSION@" "macosx-cross"
 .SH NAME
 macosx-cross-@MACOSX_CROSS_CLANG@ \- macOS cross-compiling @MACOSX_CROSS_CLANG_TEXT@ wrapper
 .SH SYNOPSIS
@@ -14,13 +14,14 @@ for cross-compiling software for Apple platforms from a non-macOS host.
 The wrapper selects the requested macOS SDK, configures the appropriate
 Apple target and sysroot, and invokes
 .BR @MACOSX_CROSS_CLANG@ (1)
-with the LLVM LLD linker.
+with the selected configuration.
 
 The SDK must have been installed and initialized by
-.BR macosx-cross .
+.BR macosx-cross (1).
+
 .SH OPTIONS
 .TP
-.BI --macosx-cross-path
+.B --macosx-cross-path
 Print the macosx-cross installation directory and exit.
 
 .TP
@@ -38,6 +39,10 @@ Select the Apple target triple.
 .TP
 .BI --target " TARGET"
 Select the Apple target triple.
+
+.TP
+.B --list-target
+List all targets supported by the selected SDK and exit successfully.
 
 .SH TARGETS
 Targets are obtained from the SDK metadata.
@@ -100,7 +105,9 @@ option.
 
 .TP
 .B FRAMEWORK_SEARCH_PATHS
-Framework search path passed to @MACOSX_CROSS_CLANG_TEXT@ using the
+Additional framework search path.
+
+The value is passed to @MACOSX_CROSS_CLANG_TEXT@ using the
 .B -F
 option.
 
@@ -128,12 +135,10 @@ The wrapper invokes @MACOSX_CROSS_CLANG_TEXT@ with options equivalent to:
 .EX
 @MACOSX_CROSS_CLANG@ \\
     --target=TARGET \\
-    --sysroot=SDK \\
-    -fuse-ld=lld \\
-    -Wno-unused-command-line-argument
+    --sysroot=SDK
 .EE
 
-Additional framework search paths and configured default CFLAGS are also
+Additional framework search paths and configured default CFLAGS are
 passed when available.
 
 .SH EXAMPLES
@@ -179,7 +184,18 @@ Use environment variables instead of command-line options:
 .EX
 MACOSX_SDK_VERSION=14.5 \\
 MACOSX_TARGET=arm64-apple-darwin \\
-macosx-cross-@MACOSX_CROSS_CLANG@ hello.@MACOSX_CROSS_CLANG_FILE@ -o hello
+macosx-cross-@MACOSX_CROSS_CLANG@ \\
+    hello.@MACOSX_CROSS_CLANG_FILE@ -o hello
+.EE
+
+.PP
+List targets supported by an SDK:
+
+.PP
+.EX
+macosx-cross-@MACOSX_CROSS_CLANG@ \\
+    --macosx-sdk 14.5 \\
+    --list-target
 .EE
 
 .PP
@@ -206,12 +222,15 @@ Metadata for an installed SDK.
 .SH EXIT STATUS
 .TP
 .B 0
-Successful execution.
+Successful execution, including
+.B --macosx-cross-path
+and
+.B --list-target.
 
 .TP
 .B non-zero
-An error occurred, the requested SDK or target is invalid, or @MACOSX_CROSS_CLANG_TEXT@
-returned an error.
+An error occurred, the requested SDK or target is invalid, or
+@MACOSX_CROSS_CLANG_TEXT@ returned an error.
 
 .SH SEE ALSO
 .BR @MACOSX_CROSS_CLANG@ (1),
@@ -220,6 +239,7 @@ returned an error.
 
 .SH AUTHOR
 MrR736 <MrR736@users.github.com>
+
 .SH COPYRIGHT
 Copyright \(co 2026 MrR736.
 .br

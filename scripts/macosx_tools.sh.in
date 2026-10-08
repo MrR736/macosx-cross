@@ -51,14 +51,35 @@ WARN() {
 	echo "macosx-cross: Warning: $*" >&2
 }
 
-if MACOSX_CHECK_INTERNET && [[ MACOSX_TOOLS_SH_LOADED == 0 ]]; then
-	rm -f "${MACOSX_CACHE}/macosx.tags" "${MACOSX_CACHE}/macosx_sdks.json"
-	curl -fsSL "https://api.github.com/repos/joseluisq/macosx-sdks/tags" | grep '"name":' |
-		sed -E 's/.*"name": "([^"]+)".*/\1/' > "${MACOSX_CACHE}/macosx.tags" ||
-		DIE "Failed to download macOS SDK tags."
+if MACOSX_CHECK_INTERNET; then
+	rm -f "${MACOSX_CACHE}/macosx.tags" "${MACOSX_CACHE}/macosx_sdks.json" \
+		  "${MACOSX_CACHE}/macosx_sdks.joseluisq.json" "${MACOSX_CACHE}/macosx_sdks.MrR736.json"
+	{
+		CUSTOM_MACOSX_SDK_VERSIONS="$(
+			curl -fsSL 'https://raw.githubusercontent.com/MrR736/macosx-cross/refs/heads/main/json/macosx.tags'
+		)" || DIE "Failed to download custom macOS SDK tags."
+
+		printf '%s\n' "$CUSTOM_MACOSX_SDK_VERSIONS"
+		curl -fsSL "https://api.github.com/repos/joseluisq/macosx-sdks/tags" | grep '"name":' | sed -E 's/.*"name": "([^"]+)".*/\1/'
+	} | awk 'NF && !seen[$0]++' | sort -V -r > "${MACOSX_CACHE}/macosx.tags" || DIE "Failed to generate macOS SDK tags."
 
 	curl -fsSL "https://raw.githubusercontent.com/joseluisq/macosx-sdks/refs/heads/master/macosx_sdks.json" \
-		> "${MACOSX_CACHE}/macosx_sdks.json" || DIE "Failed to download macOS SDK metadata."
+		> "${MACOSX_CACHE}/macosx_sdks.joseluisq.json" || DIE "Failed to download macOS SDK metadata."
+
+	curl -fsSL "https://raw.githubusercontent.com/MrR736/macosx-cross/refs/heads/main/json/macosx_sdks.json" \
+		> "${MACOSX_CACHE}/macosx_sdks.MrR736.json" || DIE "Failed to download macOS SDK metadata."
+
+
+	jq -s '
+	add | unique_by(.version)
+	| sort_by(
+		.version | capture("(?<major>[0-9]+)\\.(?<minor>[0-9]+)(?<suffix>u)?") | [
+				(.major | tonumber),
+				(.minor | tonumber),
+				(if .suffix == "u" then 1 else 0 end)
+		]
+	) | reverse
+	' "${MACOSX_CACHE}/macosx_sdks.joseluisq.json" "${MACOSX_CACHE}/macosx_sdks.MrR736.json" > "${MACOSX_CACHE}/macosx_sdks.json"
 elif [[ ! -f "${MACOSX_CACHE}/macosx.tags" || ! -f "${MACOSX_CACHE}/macosx_sdks.json" ]]; then
 	DIE "macOS SDK metadata is missing and Internet is OFF."
 fi
@@ -200,7 +221,117 @@ data = data.replace(
 	b"http://www.apple.com/DTDs/PropertyList-1.0.dtd",
 )
 
-result = plistlib.loads(data)
+# ------------------------------------------------------------
+# Parse SDKSettings.plist
+#
+# Mac OS X 10.1 SDKs use the old OpenStep plist format:
+#
+# {
+#	 Key = "value";
+#	 Dictionary = {
+#		 Key = "value";
+#	 };
+# }
+#
+# plistlib only supports XML and binary plists, so handle the
+# legacy format explicitly.
+# ------------------------------------------------------------
+
+def parse_openstep_plist(data):
+	text = data.decode("utf-8")
+
+	# Tokenizer for the subset used by Apple's old SDKSettings.plist.
+	import re
+
+	token_re = re.compile(
+		r'''
+		"(?:\\.|[^"\\])*"	   | # quoted string
+		[A-Za-z0-9_./:+-]+	  | # bare word
+		[{}=;]					# punctuation
+		''',
+		re.VERBOSE,
+	)
+
+	tokens = token_re.findall(text)
+	pos = 0
+
+	def unquote(value):
+		if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+			# Use JSON-compatible escaping where possible.
+			import json
+			try:
+				return json.loads(value)
+			except Exception:
+				return value[1:-1]
+		return value
+
+	def parse_value():
+		nonlocal pos
+
+		if pos >= len(tokens):
+			raise ValueError("unexpected end of plist")
+
+		token = tokens[pos]
+
+		if token == "{":
+			return parse_dict()
+
+		if token.startswith('"'):
+			pos += 1
+			return unquote(token)
+
+		pos += 1
+		return token
+
+	def parse_dict():
+		nonlocal pos
+
+		if tokens[pos] != "{":
+			raise ValueError("expected '{'")
+
+		pos += 1
+		result = {}
+
+		while pos < len(tokens):
+			if tokens[pos] == "}":
+				pos += 1
+				return result
+
+			key = tokens[pos]
+			pos += 1
+
+			key = unquote(key)
+
+			if pos >= len(tokens) or tokens[pos] != "=":
+				raise ValueError(
+					f"expected '=' after key {key!r}"
+				)
+
+			pos += 1
+
+			value = parse_value()
+			result[key] = value
+
+			if pos >= len(tokens):
+				raise ValueError(
+					f"expected ';' after key {key!r}"
+				)
+
+			if tokens[pos] == ";":
+				pos += 1
+			elif tokens[pos] != "}":
+				raise ValueError(
+					f"expected ';' after key {key!r}"
+				)
+
+		raise ValueError("unterminated dictionary")
+
+	return parse_dict()
+
+try:
+	result = plistlib.loads(data)
+except plistlib.InvalidFileException as e:
+	result = parse_openstep_plist(data)
 
 # Existing Apple plist information
 default_properties = result.get("DefaultProperties", {})
@@ -257,6 +388,11 @@ GENERATE_MACOSX_SDK_METADATA() {
 		DIE "SDKSettings.json not found: $SDK_SETTINGS"
 	fi
 
+	local MACOSX_DEPLOYMENT_TARGET_I
+	MACOSX_DEPLOYMENT_TARGET_I="$(jq -er '.DefaultProperties.MACOSX_DEPLOYMENT_TARGET' "$SDK_SETTINGS")" || {
+		DIE "Invalid SDKSettings.json: missing .DefaultProperties.MACOSX_DEPLOYMENT_TARGET"
+	}
+
 	local KASAN_DEFAULT_CFLAGS
 	KASAN_DEFAULT_CFLAGS="$(jq -er '.DefaultProperties.KASAN_CFLAGS_CLASSIC' "$SDK_SETTINGS")" || {
 		DIE "Invalid SDKSettings.json: missing .DefaultProperties.KASAN_CFLAGS_CLASSIC"
@@ -273,7 +409,9 @@ GENERATE_MACOSX_SDK_METADATA() {
 
 	local MACOSX_ARCH_LIST=""
 	local IOS_ARCH_LIST=""
+	local IOS_IPHONEOS_DEPLOYMENT_TARGET_DEFAULT=""
 	local IOSMAC_ARCH_LIST=""
+	local IOSMAC_IPHONEOS_DEPLOYMENT_TARGET_DEFAULT=""
 
 	if jq -e '.SupportedTargets.macosx | type == "object"' "$SDK_SETTINGS" >/dev/null; then
 		MACOSX_ARCH_LIST="$(jq -er '.SupportedTargets.macosx.Archs | join(" ")' "$SDK_SETTINGS")" || {
@@ -285,12 +423,18 @@ GENERATE_MACOSX_SDK_METADATA() {
 		IOS_ARCH_LIST="$(jq -er '.SupportedTargets.ios.Archs | join(" ")' "$SDK_SETTINGS")" || {
 			DIE "Invalid SDKSettings.json: missing .SupportedTargets.ios.Archs"
 		}
+		IOS_IPHONEOS_DEPLOYMENT_TARGET_DEFAULT="$(
+			jq -r '.SupportedTargets.ios.DefaultDeploymentTarget // empty' "${MACOSX_SDK}/SDKSettings.json"
+		)"
 	fi
 
 	if jq -e '.SupportedTargets.iosmac | type == "object"' "$SDK_SETTINGS" >/dev/null; then
 		IOSMAC_ARCH_LIST="$(jq -er '.SupportedTargets.iosmac.Archs | join(" ")' "$SDK_SETTINGS")" || {
 			DIE "Invalid SDKSettings.json: missing .SupportedTargets.iosmac.Archs"
 		}
+		IOSMAC_IPHONEOS_DEPLOYMENT_TARGET_DEFAULT="$(
+			jq -r '.SupportedTargets.iosmac.DefaultDeploymentTarget // empty' "${MACOSX_SDK}/SDKSettings.json"
+		)"
 	fi
 
 	local -a MACOSX_TARGETS=()
@@ -360,5 +504,8 @@ KERNEL_FRAMEWORK="${MACOSX_SDK}/System/Library/Frameworks/Kernel.framework"
 KERNEL_FRAMEWORK_HEADERS="\${KERNEL_FRAMEWORK}/Headers"
 KERNEL_EXTENSION_HEADER_SEARCH_PATHS="\${KERNEL_FRAMEWORK}/PrivateHeaders \${KERNEL_FRAMEWORK_HEADERS}"
 IOS_UNZIPPERED_TWIN_PREFIX_PATH="${IOS_UNZIPPERED_TWIN_PREFIX_PATH}"
+MACOSX_DEPLOYMENT_TARGET_I="${MACOSX_DEPLOYMENT_TARGET_I}"
+IOS_IPHONEOS_DEPLOYMENT_TARGET_DEFAULT="${IOS_IPHONEOS_DEPLOYMENT_TARGET_DEFAULT}"
+IOSMAC_IPHONEOS_DEPLOYMENT_TARGET_DEFAULT="${IOSMAC_IPHONEOS_DEPLOYMENT_TARGET_DEFAULT}"
 EOF
 }

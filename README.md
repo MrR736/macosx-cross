@@ -31,7 +31,6 @@ The host system requires:
 - `tar`
 - CMake
 - `make`
-- `python3`
 
 Depending on the operation, root privileges may be required to install or remove SDKs and system-wide files.
 
@@ -518,7 +517,8 @@ Current tools include:
 ```text
 tools/
 ├── cmake/
-└── make/
+├── make/
+└── mk -> make
 ```
 
 ### Copy a tool
@@ -540,6 +540,14 @@ For `make`:
 ```bash
 macosx-cross --tool make
 ```
+
+The `mk` tool is a symbolic link to `make`:
+
+```text
+mk -> make
+```
+
+Copying it preserves the symbolic link.
 
 ### List available tools
 
@@ -661,7 +669,8 @@ macosx-cross/
 ├── scripts/
 ├── tools/
 │   ├── cmake/
-│   └── make/
+│   ├── make/
+│   └── mk -> make
 ├── CMakeLists.txt
 ├── LICENSE
 └── README.md
@@ -694,7 +703,8 @@ Create a simple C program:
 ```c
 #include <stdio.h>
 
-int main(void) {
+int main(void)
+{
     puts("Hello from macOS cross-compilation!");
     return 0;
 }
@@ -812,4 +822,10 @@ for the complete license text.
 
 ## Author
 
-**MrR736** <[MrR736@users.github.com](mailto:MrR736@users.github.com)>
+MrR736 <MrR736@users.github.com>
+
+## Source
+
+The project source repository is:
+
+https://github.com/MrR736/macosx-cross
