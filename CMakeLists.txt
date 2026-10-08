@@ -6,7 +6,7 @@ include(GNUInstallDirs)
 
 set(MACOSX_CROSS_VERSION "v${PROJECT_VERSION}")
 
-set(MACOSX_CFLAGS "-fuse-ld=ld64.lld -Wno-unused-command-line-argument")
+set(MACOSX_CFLAGS "-fuse-ld=lld -Wno-unused-command-line-argument")
 set(MACOSX_CXXFLAGS "${MACOSX_CFLAGS}")
 set(MACOSX_CROSS_LIBDIR "${CMAKE_INSTALL_PREFIX}/lib/${PROJECT_NAME}")
 
