@@ -46,7 +46,7 @@
     "architectures": [
       "x86",
       "x86_64",
-      "ppc"
+      "powerpc"
     ],
     "github_release": "https://github.com/phracker/MacOSX-SDKs/releases/tag/11.3",
     "github_download_url": "https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.6.sdk.tar.xz",
@@ -58,7 +58,7 @@
     "darwin": "8.0",
     "release_date": "2005-04-29",
     "architectures": [
-      "ppc",
+      "powerpc",
       "x86"
     ],
     "github_release": "https://github.com/phracker/MacOSX-SDKs/releases/tag/11.3",
@@ -71,7 +71,7 @@
     "darwin": "7.9",
     "release_date": "2005-04-15",
     "architectures": [
-      "ppc"
+      "powerpc"
     ],
     "github_release": "https://github.com/phracker/MacOSX-SDKs/releases/tag/11.3",
     "github_download_url": "https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.3.9.sdk.tar.xz",
@@ -83,7 +83,7 @@
     "darwin": "7.0",
     "release_date": "2003-10-24",
     "architectures": [
-      "ppc"
+      "powerpc"
     ],
     "github_release": "https://github.com/phracker/MacOSX-SDKs/releases/tag/11.3",
     "github_download_url": "https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.3.0.sdk.tar.xz",
@@ -95,7 +95,7 @@
     "darwin": "6.8",
     "release_date": "2003-10-03",
     "architectures": [
-      "ppc"
+      "powerpc"
     ],
     "github_release": "https://github.com/phracker/MacOSX-SDKs/releases/tag/11.3",
     "github_download_url": "https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.2.8.sdk.tar.xz",
@@ -107,7 +107,7 @@
     "darwin": "5.5",
     "release_date": "2002-05-06",
     "architectures": [
-      "ppc"
+      "powerpc"
     ],
     "github_release": "https://github.com/phracker/MacOSX-SDKs/releases/tag/11.3",
     "github_download_url": "https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.1.5.sdk.tar.xz",
