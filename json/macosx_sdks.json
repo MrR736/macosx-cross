@@ -37,17 +37,5 @@
     "github_release": "https://github.com/phracker/MacOSX-SDKs/releases/tag/11.3",
     "github_download_url": "https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.7.sdk.tar.xz",
     "github_download_sha256sum": null
-  },
-  {
-    "version": "Mac OS X 10.1.5",
-    "name": "Puma",
-    "darwin": "5.5.0",
-    "release_date": "2002-05-06",
-    "architectures": [
-      "powerpc"
-    ],
-    "github_release": "https://github.com/phracker/MacOSX-SDKs/releases/tag/11.3",
-    "github_download_url": "https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.1.5.sdk.tar.xz",
-    "github_download_sha256sum": null
   }
 ]
