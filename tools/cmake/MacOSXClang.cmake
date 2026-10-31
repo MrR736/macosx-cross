@@ -57,7 +57,7 @@ endif()
 
 set(CMAKE_C_COMPILER "${MACOSX_CROSS_CLANG};--macosx-sdk=${MACOSX_SDK_VERSION};--target=${MACOSX_TARGET}" CACHE STRING "macosx-cross C Compiler")
 set(CMAKE_CXX_COMPILER "${MACOSX_CROSS_CLANGXX};--macosx-sdk=${MACOSX_SDK_VERSION};--target=${MACOSX_TARGET}" CACHE STRING "macosx-cross C++ Compiler")
-set(CMAKE_ASM_COMPILER "${MACOSX_CROSS_CLANG}" CACHE FILEPATH "macosx-cross assembler")
+set(CMAKE_ASM_COMPILER "${MACOSX_CROSS_CLANG};--macosx-sdk=${MACOSX_SDK_VERSION};--target=${MACOSX_TARGET}" CACHE FILEPATH "macosx-cross assembler")
 
 # Target
 string(REGEX REPLACE "-apple-.*$" "" MACOSX_ARCH "${MACOSX_TARGET}")

@@ -94,7 +94,20 @@ if [[ -n "$MACOSX_SDK_ARCHS" ]]; then
 	for arch in "${ARCHS[@]}"; do
 		MACOSX_TARGETS+=("${arch}-apple-darwin")
 		MACOSX_TARGETS+=("${arch}-apple-darwin$MACOSX_SDK_DARWIN_VERSION")
+		MACOSX_TARGETS+=("${arch}-apple-macosx")
+		MACOSX_TARGETS+=("${arch}-apple-macosx$MACOSX_SDK_VERSION.0")
+
+		if [[ "${arch}" == "x86" ]]; then
+			MACOSX_TARGETS+=("i386-apple-macosx")
+			MACOSX_TARGETS+=("i386-apple-macosx$MACOSX_SDK_VERSION.0")
+		fi
 	done
+fi
+
+if [[ "$MACOSX_SDK_VERSION" == "10.7" || "$MACOSX_SDK_VERSION" == "10.8" ]]; then
+	if [[ "$MACOSX_TARGET" == x86-apple-darwin* || "$MACOSX_TARGET" == i386-apple-darwin* ]]; then
+		MACOSX_TARGET="i386-apple-macosx"
+	fi
 fi
 
 if [[ -n "$MACOSX_SDK_IOS_ARCHS" ]]; then
@@ -142,6 +155,21 @@ case "$MACOSX_TARGET" in
 		export MACOSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET_I"
 		;;
 
+	*-apple-macosx)
+		MACOSX_SUPPORTED_ARCHS="$MACOSX_SDK_ARCHS"
+		export MACOSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET_I"
+		;;
+
+	*-apple-macosx$MACOSX_SDK_VERSION)
+		MACOSX_SUPPORTED_ARCHS="$MACOSX_SDK_ARCHS"
+		export MACOSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET_I"
+		;;
+
+	*-apple-macosx$MACOSX_SDK_VERSION.0)
+		MACOSX_SUPPORTED_ARCHS="$MACOSX_SDK_ARCHS"
+		export MACOSX_DEPLOYMENT_TARGET="$MACOSX_DEPLOYMENT_TARGET_I"
+		;;
+
 	*-apple-ios-macabi)
 		MACOSX_SUPPORTED_ARCHS="$MACOSX_SDK_IOSMAC_ARCHS"
 		export IPHONEOS_DEPLOYMENT_TARGET="$IOSMAC_IPHONEOS_DEPLOYMENT_TARGET_DEFAULT"
@@ -168,7 +196,14 @@ case "$MACOSX_TARGET" in
 		;;
 esac
 
-if ! IF_ARRAY_ITEM "$MACOSX_ARCH" $MACOSX_SUPPORTED_ARCHS; then
+# Validate the requested architecture against the SDK.
+MACOSX_SDK_ARCH="$MACOSX_ARCH"
+
+if [[ "$MACOSX_SDK_ARCH" == "i386" ]]; then
+	MACOSX_SDK_ARCH="x86"
+fi
+
+if ! IF_ARRAY_ITEM "$MACOSX_SDK_ARCH" $MACOSX_SUPPORTED_ARCHS; then
 	echo "Architecture '$MACOSX_ARCH' is not supported for target '${MACOSX_TARGET}' by macOS SDK $MACOSX_SDK_VERSION" >&2
 	exit 1
 fi
