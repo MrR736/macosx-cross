@@ -11,5 +11,31 @@
     "github_release": "https://github.com/phracker/MacOSX-SDKs/releases/tag/11.3",
     "github_download_url": "https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX11.0.sdk.tar.xz",
     "github_download_sha256sum": null
+  },
+  {
+    "version": "OS X 10.8",
+    "name": "Mountain Lion",
+    "darwin": "12.0.0",
+    "release_date": "2012-07-25",
+    "architectures": [
+      "x86",
+      "x86_64"
+    ],
+    "github_release": "https://github.com/phracker/MacOSX-SDKs/releases/tag/11.3",
+    "github_download_url": "https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.8.sdk.tar.xz",
+    "github_download_sha256sum": null
+  },
+  {
+    "version": "OS X 10.7",
+    "name": "Lion",
+    "darwin": "11.0.0",
+    "release_date": "2011-07-20",
+    "architectures": [
+      "x86",
+      "x86_64"
+    ],
+    "github_release": "https://github.com/phracker/MacOSX-SDKs/releases/tag/11.3",
+    "github_download_url": "https://github.com/phracker/MacOSX-SDKs/releases/download/11.3/MacOSX10.7.sdk.tar.xz",
+    "github_download_sha256sum": null
   }
 ]
