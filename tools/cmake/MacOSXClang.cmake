@@ -6,6 +6,10 @@ endif()
 
 set(_MACOSX_CLANG_CMAKE 1)
 
+set(MACOSX_CROSS_CMAKE_VERSION "1.0.0")
+
+option(MACOSX_CROSS_VERBOSE "Enable macosx-cross diagnostics" OFF)
+
 # Propagate macosx-cross configuration into CMake try_compile() projects.
 set(CMAKE_TRY_COMPILE_PLATFORM_VARIABLES MACOSX_SDK_VERSION MACOSX_TARGET)
 
@@ -93,9 +97,12 @@ set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
 set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
 
 # Diagnostics
-message(STATUS "macosx-cross")
-message(STATUS "  C compiler     : ${MACOSX_CROSS_CLANG}")
-message(STATUS "  C++ compiler   : ${MACOSX_CROSS_CLANGXX}")
-message(STATUS "  SDK version    : ${MACOSX_SDK_VERSION}")
-message(STATUS "  Target         : ${MACOSX_TARGET}")
-message(STATUS "  Architecture   : ${MACOSX_ARCH}")
+if(MACOSX_CROSS_VERBOSE)
+	message(STATUS "macosx-cross")
+	message(STATUS "  CMake module   : ${MACOSX_CROSS_CMAKE_VERSION}")
+	message(STATUS "  C compiler     : ${MACOSX_CROSS_CLANG}")
+	message(STATUS "  C++ compiler   : ${MACOSX_CROSS_CLANGXX}")
+	message(STATUS "  SDK version    : ${MACOSX_SDK_VERSION}")
+	message(STATUS "  Target         : ${MACOSX_TARGET}")
+	message(STATUS "  Architecture   : ${MACOSX_ARCH}")
+endif()
