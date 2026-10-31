@@ -2,7 +2,7 @@
   {
     "version": "macOS 11.0",
     "name": "Big Sur",
-    "darwin": "20.0",
+    "darwin": "20.0.0",
     "release_date": "2020-11-12",
     "architectures": [
       "x86_64",
@@ -15,7 +15,7 @@
   {
     "version": "OS X 10.8",
     "name": "Mountain Lion",
-    "darwin": "12.0",
+    "darwin": "12.0.0",
     "release_date": "2012-07-25",
     "architectures": [
       "x86",
@@ -28,7 +28,7 @@
   {
     "version": "OS X 10.7",
     "name": "Lion",
-    "darwin": "11.0",
+    "darwin": "11.0.0",
     "release_date": "2011-07-20",
     "architectures": [
       "x86",
@@ -41,7 +41,7 @@
   {
     "version": "Mac OS X 10.6",
     "name": "Snow Leopard",
-    "darwin": "10.0",
+    "darwin": "10.0.0",
     "release_date": "2009-08-28",
     "architectures": [
       "x86",
@@ -55,7 +55,7 @@
   {
     "version": "Mac OS X 10.4u",
     "name": "Tiger",
-    "darwin": "8.0",
+    "darwin": "8.0.0",
     "release_date": "2005-04-29",
     "architectures": [
       "powerpc",
@@ -68,7 +68,7 @@
   {
     "version": "OS X 10.3.9",
     "name": "Panther",
-    "darwin": "7.9",
+    "darwin": "7.9.0",
     "release_date": "2005-04-15",
     "architectures": [
       "powerpc"
@@ -80,7 +80,7 @@
   {
     "version": "OS X 10.3.0",
     "name": "Panther",
-    "darwin": "7.0",
+    "darwin": "7.0.0",
     "release_date": "2003-10-24",
     "architectures": [
       "powerpc"
@@ -92,7 +92,7 @@
   {
     "version": "Mac OS X 10.2.8",
     "name": "Jaguar",
-    "darwin": "6.8",
+    "darwin": "6.8.0",
     "release_date": "2003-10-03",
     "architectures": [
       "powerpc"
@@ -104,7 +104,7 @@
   {
     "version": "Mac OS X 10.1.5",
     "name": "Puma",
-    "darwin": "5.5",
+    "darwin": "5.5.0",
     "release_date": "2002-05-06",
     "architectures": [
       "powerpc"

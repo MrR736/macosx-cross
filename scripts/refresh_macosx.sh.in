@@ -10,6 +10,23 @@ if ! IF_MACOSX_VERSION_DIR "$MACOSX_SDK_VERSION"; then
 	DIE "Invalid macOS SDK version: $MACOSX_SDK_VERSION"
 fi
 
+MACOSX_SDK_DARWIN="$(
+	printf '%s' "$MACOSX_SDKS_JSON" |
+		jq -er --arg version "$MACOSX_SDK_VERSION" '
+			.[] |
+			select(
+				.version == ("macOS " + $version) or
+				.version == ("OS X " + $version) or
+				.version == ("Mac OS " + $version) or
+				.version == ("Mac OS X " + $version)
+			) |
+			.darwin |
+			split(".") |
+			.[:2] |
+			join(".")
+		'
+)"
+
 MACOSX_SDK="${OSX_SDK}/${MACOSX_SDK_VERSION}"
 if [[ -f "${MACOSX_SDK}/.metadata" ]]; then
 	if [[ ! -w "${MACOSX_SDK}" ]]; then
@@ -17,6 +34,6 @@ if [[ -f "${MACOSX_SDK}/.metadata" ]]; then
 			DIE "Cannot make macOS SDK writable."
 	fi
 	rm -f "${MACOSX_SDK}/.metadata"
-	GENERATE_MACOSX_SDK_METADATA "${MACOSX_SDK}"
+	GENERATE_MACOSX_SDK_METADATA "${MACOSX_SDK}" "${MACOSX_SDK_DARWIN}"
 fi
 

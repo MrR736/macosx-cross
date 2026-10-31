@@ -23,6 +23,23 @@ MACOSX_SDK_URL="$(
 			.github_download_url'
 )"
 
+MACOSX_SDK_DARWIN="$(
+	printf '%s' "$MACOSX_SDKS_JSON" |
+		jq -er --arg version "$MACOSX_SDK_VERSION" '
+			.[] |
+			select(
+				.version == ("macOS " + $version) or
+				.version == ("OS X " + $version) or
+				.version == ("Mac OS " + $version) or
+				.version == ("Mac OS X " + $version)
+			) |
+			.darwin |
+			split(".") |
+			.[:2] |
+			join(".")
+		'
+)"
+
 MACOSX_SDK_FILE="$(basename "$MACOSX_SDK_URL")"
 MACOSX_SDK="${OSX_SDK}/${MACOSX_SDK_VERSION}"
 SDK_SETTINGS="${MACOSX_SDK}/SDKSettings.json"
@@ -66,6 +83,6 @@ if [[ ! -f "${MACOSX_SDK}/.metadata" ]]; then
 		DIE "SDKSettings.json not found after extraction"
 	fi
 
-	GENERATE_MACOSX_SDK_METADATA "${MACOSX_SDK}"
+	GENERATE_MACOSX_SDK_METADATA "${MACOSX_SDK}" "${MACOSX_SDK_DARWIN}"
 fi
 
